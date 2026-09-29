@@ -1,0 +1,57 @@
+name: Demo on GitHub Pages
+
+# Publishes the playground (live chat on the mock backend + the component gallery) to
+# https://neofloai.github.io/agentic-chat-ui/. One-time setup: Settings → Pages → Source: GitHub Actions.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # PAGES=1 compiles the real-backend code path out, so no URL or token can reach the bundle.
+      - run: npm run playground:build
+        env:
+          PAGES: '1'
+          PAGES_BASE: /agentic-chat-ui/
+
+      - name: Check the bundle has no backend settings
+        run: |
+          if grep -rE "VITE_CHAT_(BASE_URL|TOKEN)" dist-playground; then
+            echo "Backend settings leaked into the Pages bundle" && exit 1
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-playground
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

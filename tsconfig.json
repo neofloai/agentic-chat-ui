@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["vitest/globals"],
+    "baseUrl": ".",
+    "paths": {
+      "@neofloai/agentic-chat": ["./src/index.ts"],
+      "@neofloai/agentic-chat/headless": ["./src/headless.ts"],
+      "@neofloai/agentic-chat/core": ["./src/core.ts"],
+      "@neofloai/agentic-chat/charts": ["./src/charts.ts"],
+      "@neofloai/agentic-chat/mock": ["./src/mock.ts"]
+    }
+  },
+  "include": ["src", "test", "tsup.config.ts", "vitest.config.ts"]
+}
