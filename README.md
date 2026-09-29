@@ -1,3 +1,5 @@
+<img src="docs/brand/neoflo-mark.png" width="56" height="56" alt="Neoflo" />
+
 # @neofloai/agentic-chat
 
 A React chat UI for agentic assistants. Point it at any backend that implements the **Neoflo chat-layer schema v1**. You get streaming answers, chat history, human-in-the-loop decisions, tool activity, tables, charts and custom cards without building any of it yourself.
