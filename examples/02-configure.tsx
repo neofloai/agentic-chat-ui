@@ -3,6 +3,8 @@ import { AgenticChat, createRestAdapter, type Attachment } from '@neofloai/agent
 
 declare function getAccessToken(): Promise<string>;
 declare function refreshSession(): Promise<boolean>;
+declare function openWorkspacePicker(): Promise<boolean>;
+declare function connectSource(sourceId: string): Promise<boolean>;
 declare function uploadToStorage(file: File, onProgress: (p: number) => void, signal: AbortSignal): Promise<string>;
 declare const currentUser: { idHash: string };
 declare const invoiceOnScreen: { id: string } | null;
@@ -11,8 +13,9 @@ declare const router: { push(path: string): void };
 const adapter = createRestAdapter({
   baseUrl: 'https://api.example.com',
   headers: async () => ({ Authorization: `Bearer ${await getAccessToken()}` }),
-  // A 401 calls this once; return true after refreshing to retry the request.
-  onUnauthorized: refreshSession,
+  // A 401 calls this once with its error code; return true once the user can continue, to
+  // retry the request. `unauthenticated` means sign in again; a product code can mean more.
+  onUnauthorized: ({ code }) => (code === 'askneo.workspace_required' ? openWorkspacePicker() : refreshSession()),
 });
 
 export function Chat({ conversationId }: { conversationId?: string }) {
@@ -58,7 +61,10 @@ export function Chat({ conversationId }: { conversationId?: string }) {
       onAction={(action) => {
         if (action.name === 'open_invoice') router.push(`/invoices/${(action.payload as { id: string }).id}`);
       }}
-      onError={(error) => console.warn(error.type, error.message)}
+      // A connected system (an ERP, invoice processing…) needs reconnecting: hand your backend
+      // the credential, return true, and the chat retries the message once.
+      onConnectionRequired={({ sourceId }) => (sourceId ? connectSource(sourceId) : false)}
+      onError={(error) => console.warn(error.type, error.message, error.requestId)}
       labels={{ composerPlaceholder: 'Ask Neo anything' }}
     />
   );

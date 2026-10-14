@@ -29,7 +29,9 @@ export function defineBlock<TData = ContentBlock>(definition: BlockDefinition<TD
 
 /**
  * Resolution order: `match()` functions (latest first), then an exact `type`, then a
- * `category`, then the fallback.
+ * `category`, then the fallback. A product's own type (`<product>.<name>`) skips the category
+ * step: a built-in must never render another product's card, so it goes to the fallback,
+ * which shows the block's `fallback_text`.
  */
 export function createBlockRegistry(definitions: readonly BlockDefinition[], fallback?: BlockDefinition): BlockRegistry {
   const reversed = [...definitions].reverse();
@@ -49,7 +51,10 @@ export function createBlockRegistry(definitions: readonly BlockDefinition[], fal
         // A faulty matcher must not break resolution for every other block.
       }
     }
-    return byType.get(block.type) ?? byCategory.get(block.category) ?? fallback;
+    const exact = byType.get(block.type);
+    if (exact) return exact;
+    if (block.type.includes('.')) return fallback;
+    return byCategory.get(block.category) ?? fallback;
   };
 
   return {

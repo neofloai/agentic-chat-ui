@@ -1,10 +1,10 @@
 # Block contracts
 
-This page proposes a payload for every block the chat renders out of the box. It needs sign-off from the Ask Neo and Reef backend teams. Every block carries `id`, `type` and `category`. The fields below are the rest.
+This page defines the payload of every block the chat renders out of the box, the standard types every product's backend can send. Every block carries `id`, `type` and `category`. The fields below are the rest.
 
 The parsers accept the aliases and fallbacks listed, so a backend can adopt these shapes gradually. A block the client can't parse falls back to a development-only "unsupported content" notice and never crashes the thread.
 
-**The vocabulary is closed on purpose.** A turn composes these shapes and never invents a layout. Product-specific cards (for example `invoice_card`) are registered by the host app with `defineBlock` and documented by that product.
+**The vocabulary is closed on purpose.** A turn composes these shapes and never invents a layout. A product's own cards use [`<product>.<name>` types](#product-blocks), registered by that product's app with `defineBlock`.
 
 ## text
 
@@ -29,7 +29,43 @@ The parsers accept the aliases and fallbacks listed, so a backend can adopt thes
 
 - `text` (or `thinking`) is the model's reasoning. `duration_ms` is optional; the client measures it while streaming if it's missing.
 
+## tool_use and tool_result
+
+The standard way to show a tool call: a `tool_use` block when the call starts, and exactly one `tool_result` when it returns, including on error. The client pairs them by `tool_use_id` and renders one card: the call's input, then what it returned.
+
+```json
+{ "id": "toolu_01A9", "type": "tool_use", "category": "tool", "tool": "search_v2", "input": { "query": "Acme open invoices Q3" } }
+```
+
+```json
+{
+  "id": "f4a5b6c7",
+  "type": "tool_result",
+  "category": "tool",
+  "tool_use_id": "toolu_01A9",
+  "is_error": false,
+  "error_code": null,
+  "result_count": 2,
+  "results": [{ "title": "INV-1042", "snippet": "Acme Corp · $12,400 · open", "url": null }],
+  "http_trace": null
+}
+```
+
+| Field                      | Notes                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `tool_use.tool`            | The tool id, shown as the title. Aliases: `name`, `tool_name`.                                                      |
+| `tool_use.title`           | Optional friendlier title.                                                                                          |
+| `tool_use.input`           | Shown as key/value rows.                                                                                            |
+| `tool_result.tool_use_id`  | The `tool_use` block's `id`. A result with no matching call in the message gets a card of its own.                  |
+| `tool_result.is_error`     | `true` shows the card as failed, with `error_code` (or `error`/`message`) as the reason.                            |
+| `tool_result.result_count` | Shown as "N results". Up to five `results` are listed under it, as `{ title, snippet, url }`; `url` becomes a link. |
+| `tool_result.http_trace`   | Debug data. `null` in production, and never shown.                                                                  |
+
+Until its result arrives the card shows "Running". If the reply ends (`message_stop` other than `paused`, Stop, or a dropped stream) without the result, the card shows "Interrupted" instead of spinning.
+
 ## tool_call
+
+The older single-block form, still accepted: one block carries both the input and the result.
 
 ```json
 {
@@ -243,6 +279,23 @@ A single- or multi-select question. Pair it with a `checkpoint` event.
 | `value_format`, `currency` | Axis and tooltip formatting.                                                                     |
 
 Colors come from the Atoms palette. Don't send hex colors unless a series genuinely needs a fixed one (`series[].color`).
+
+## Product blocks
+
+A product's own card uses the type `<product>.<name>`, where `<product>` is the config's `product.id` (for example `askneo.invoice_card`). It must carry `fallback_text`:
+
+```json
+{
+  "id": "b9",
+  "type": "askneo.invoice_card",
+  "category": "ui",
+  "fallback_text": "**INV-1042** · Redwood Components · 3,940.24 · held on a price difference",
+  "data": { "number": "INV-1042", "amount": 3940.24 }
+}
+```
+
+- The product's app registers a renderer with `defineBlock({ type: 'askneo.invoice_card', … })`.
+- Any other app shows `fallback_text` as Markdown, so the answer still reads correctly. A `<product>.<name>` block is never given to a built-in renderer by its `category`.
 
 ## checkpoint.requires
 

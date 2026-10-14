@@ -19,7 +19,7 @@ import { forwardRef, useEffect, useId, useState, type FormHTMLAttributes, type R
 import type { Attachment } from '../../core/protocol/types';
 import { formatBytes } from '../../core/runtime/runtime';
 import type { ComposerAttachment } from '../../core/store/types';
-import { useChatEvent, useLabels, useScope } from '../../react/hooks';
+import { useChatEvent, useComposer, useLabels, useScope } from '../../react/hooks';
 import { Composer, useComposerContext } from '../../react/primitives';
 import { mode, type AtomsTheme } from '../kit/tokens';
 
@@ -201,6 +201,18 @@ export function ScopePicker() {
   );
 }
 
+/** Shown when the draft is longer than the backend's `max_message_chars`. */
+function TooLongNotice() {
+  const labels = useLabels();
+  const { tooLong, maxChars } = useComposer();
+  if (!tooLong || !maxChars) return null;
+  return (
+    <Typography role="alert" variant="body2" sx={(t: AtomsTheme) => mode(t, { color: text.error[3] })}>
+      {labels.messageTooLong(maxChars)}
+    </Typography>
+  );
+}
+
 function RejectedNotice() {
   const [message, setMessage] = useState<string | null>(null);
   useChatEvent('warning', (w) => {
@@ -318,6 +330,7 @@ export function ChatComposer({ placeholder, extraActions, footer, maxRows = 8, a
       </Composer.Root>
       <Box id={hintId} sx={{ mt: 0.75, display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'center' }}>
         <RejectedNotice />
+        <TooLongNotice />
         {footer}
       </Box>
     </Box>

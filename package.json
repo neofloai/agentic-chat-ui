@@ -79,10 +79,24 @@
         "default": "./dist/mock.cjs"
       }
     },
+    "./conformance": {
+      "import": {
+        "types": "./dist/conformance.d.ts",
+        "default": "./dist/conformance.js"
+      },
+      "require": {
+        "types": "./dist/conformance.d.cts",
+        "default": "./dist/conformance.cjs"
+      }
+    },
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "agentic-chat-conformance": "./bin/agentic-chat-conformance.mjs"
   },
   "files": [
     "dist",
+    "bin",
     "README.md",
     "CHANGELOG.md"
   ],

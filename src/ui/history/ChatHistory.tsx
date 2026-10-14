@@ -276,14 +276,16 @@ export function ChatHistory({ onSelect, showNewChat = true }: ChatHistoryProps) 
         ))}
       </Box>
 
-      <Box sx={(t: AtomsTheme) => ({ px: 2, py: 1, borderTop: '1px solid', ...mode(t, { borderColor: border.layers.card1 }) })}>
-        <Switch
-          size="small"
-          label={labels.showArchived}
-          checked={history.showArchived}
-          onChange={(_, checked) => history.setShowArchived(checked)}
-        />
-      </Box>
+      {history.canArchive ? (
+        <Box sx={(t: AtomsTheme) => ({ px: 2, py: 1, borderTop: '1px solid', ...mode(t, { borderColor: border.layers.card1 }) })}>
+          <Switch
+            size="small"
+            label={labels.showArchived}
+            checked={history.showArchived}
+            onChange={(_, checked) => history.setShowArchived(checked)}
+          />
+        </Box>
+      ) : null}
 
       <Menu
         anchorEl={menu?.anchor ?? null}
@@ -301,15 +303,17 @@ export function ChatHistory({ onSelect, showNewChat = true }: ChatHistoryProps) 
           <PencilSimpleIcon size={16} />
           {labels.rename}
         </MenuItem>
-        <MenuItem
-          onClick={() => {
-            if (menu) void history.archive(menu.item.id, !menu.item.archived).catch(() => undefined);
-            closeMenu();
-          }}
-        >
-          {menu?.item.archived ? <ArrowUUpLeftIcon size={16} /> : <ArchiveIcon size={16} />}
-          {menu?.item.archived ? labels.unarchive : labels.archive}
-        </MenuItem>
+        {history.canArchive ? (
+          <MenuItem
+            onClick={() => {
+              if (menu) void history.archive(menu.item.id, !menu.item.archived).catch(() => undefined);
+              closeMenu();
+            }}
+          >
+            {menu?.item.archived ? <ArrowUUpLeftIcon size={16} /> : <ArchiveIcon size={16} />}
+            {menu?.item.archived ? labels.unarchive : labels.archive}
+          </MenuItem>
+        ) : null}
         <MenuItem
           onClick={() => {
             if (menu) setDeleting(menu.item);

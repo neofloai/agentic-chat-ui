@@ -14,6 +14,7 @@ import {
   WelcomeScreen,
   createChatRuntime,
   defaultBlocks,
+  linkToolResults,
   mode,
   unknownBlock,
   useThread,
@@ -250,6 +251,41 @@ const SAMPLES: Sample[] = [
       }),
     ]),
   },
+  {
+    id: 'tool-use-result',
+    title: 'ToolBlock',
+    note: 'tool_use and its tool_result, one card',
+    message: linkToolResults(
+      msg('m-tool-ur', [
+        b('toolu_01', { type: 'tool_use', category: 'tool', tool: 'search_v2', input: { query: 'Acme open invoices Q3' } }),
+        b('tr_01', {
+          type: 'tool_result',
+          category: 'tool',
+          tool_use_id: 'toolu_01',
+          is_error: false,
+          error_code: null,
+          result_count: 2,
+          results: [
+            { title: 'INV-1042', snippet: 'Acme Corp · 12,400 · open', url: null },
+            { title: 'INV-1051', snippet: 'Acme Corp · 9,850 · open', url: null },
+          ],
+          http_trace: null,
+        }),
+      ]),
+      { ended: true },
+    ),
+  },
+  {
+    id: 'tool-interrupted',
+    title: 'ToolBlock',
+    note: 'the reply ended without a tool_result',
+    message: linkToolResults(
+      msg('m-tool-i', [
+        b('toolu_02', { type: 'tool_use', category: 'tool', tool: 'erp_lookup', input: { vendor: 'Cascade Supply' } }),
+      ]),
+      { ended: true },
+    ),
+  },
   { id: 'table', title: 'TableBlock', note: 'result set, sortable', message: msg('m-table', [b('table', heldTable)]) },
   {
     id: 'sources',
@@ -447,6 +483,19 @@ const SAMPLES: Sample[] = [
     title: 'Unknown block',
     note: 'development only',
     message: msg('m-unk', [b('unk', { type: 'invoice_card', category: 'ui', number: 'INV-1042' })]),
+  },
+  {
+    id: 'product-block',
+    title: 'Product block',
+    note: 'askneo.invoice_card in an app without its renderer: fallback_text',
+    message: msg('m-prod', [
+      b('prod', {
+        type: 'askneo.invoice_card',
+        category: 'ui',
+        fallback_text: '**INV-1042** · Redwood Components · 3,940.24 · held on a price difference',
+        data: { number: 'INV-1042', amount: 3940.24 },
+      }),
+    ]),
   },
 ];
 

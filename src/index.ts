@@ -64,5 +64,5 @@ export {
 export { BlockShell, type BlockShellProps, type BlockTone } from './ui/kit/BlockShell';
 export { KeyValueList, type KeyValueItem } from './ui/kit/KeyValueList';
 export { Shimmer, PulseDot } from './ui/kit/Shimmer';
-export { ErrorNotice, RetryButton, safeUrl, formatDuration, useCanRetry } from './ui/kit/helpers';
+export { ErrorNotice, TurnErrorNotice, RetryButton, safeUrl, formatDuration, useCanRetry } from './ui/kit/helpers';
 export { mode, monoFont, BLOCK_ICON_PX, type AtomsTheme } from './ui/kit/tokens';

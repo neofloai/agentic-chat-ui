@@ -103,6 +103,7 @@ describe('runtime: send', () => {
 
     expect(adapter.bodies[0]).toEqual({
       stream: true,
+      client_message_id: expect.stringMatching(/^cm_/),
       message: { role: 'user', type: 'default', content: { default: 'What were Acme’s top open invoices?' } },
       workflow_context: [
         { workflow_name: 'ip', workspace_id: ['ws_fin', 'ws_page'], context: { invoice_id: 'INV-1' } },
@@ -154,7 +155,7 @@ describe('runtime: send', () => {
     expect(runtime.canRetry()).toBe(true);
   });
 
-  it('marks a dropped stream interrupted, and retry resends the same body', async () => {
+  it('marks a dropped stream interrupted, and retry resends the body with a new client id once the server saved it', async () => {
     const { runtime, adapter, thread } = setup();
     await runtime.start();
     const p = runtime.send('hi');
@@ -168,8 +169,14 @@ describe('runtime: send', () => {
 
     const r = runtime.retry();
     await until(() => expect(adapter.streams).toHaveLength(2));
-    expect(adapter.bodies[1]).toEqual(adapter.bodies[0]);
+    // message_start arrived, so the server has the first attempt: the retry is a new message.
+    const { client_message_id: first, ...rest0 } = adapter.bodies[0]!;
+    const { client_message_id: second, ...rest1 } = adapter.bodies[1]!;
+    expect(rest1).toEqual(rest0);
+    expect(second).toMatch(/^cm_/);
+    expect(second).not.toBe(first);
     expect(thread().messages).toHaveLength(1); // failed reply removed
+    expect(thread().messages[0]!.clientMessageId).toBe(second);
     adapter.lastStream().push(...withIds(normalTurn, 'conv_1'));
     adapter.lastStream().end();
     await r;

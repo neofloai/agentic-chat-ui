@@ -11,6 +11,9 @@ export { ChatContext, ThreadContext, MessageContext, BlockContext, useChatContex
 export { defaultLabels, type ChatLabels } from './react/labels';
 export {
   useChatRuntime,
+  useChatConfig,
+  useCapabilities,
+  useSourceLabel,
   useLabels,
   useActiveConversationId,
   useThreadHandle,

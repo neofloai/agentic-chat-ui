@@ -1,6 +1,9 @@
-import { Alert, Button } from '@neofloai/atoms';
+import { Alert, Box, Button } from '@neofloai/atoms';
+import { text } from '@neofloai/atoms/tokens';
 import { useEffect, useState, type ReactNode } from 'react';
-import { useChatActions, useLabels, useThread } from '../../react/hooks';
+import type { ChatErrorInfo } from '../../core/store/types';
+import { useChatActions, useChatRuntime, useLabels, useSourceLabel, useThread } from '../../react/hooks';
+import { mode, type AtomsTheme } from './tokens';
 
 const BUSY = new Set(['submitting', 'streaming', 'cancelling']);
 
@@ -53,13 +56,20 @@ export function ErrorNotice({
   retryable = true,
   retryAfter,
   onRetry,
+  action,
+  requestId,
 }: {
   title: ReactNode;
   message?: ReactNode;
   retryable?: boolean;
   retryAfter?: number | null;
   onRetry?: () => void;
+  /** Replaces the Try again button (for example Reconnect). */
+  action?: ReactNode;
+  /** Shown small under the message, for bug reports. */
+  requestId?: string | null;
 }) {
+  const labels = useLabels();
   const canRetry = useCanRetry();
   const { retry } = useChatActions();
   const handler = onRetry ?? (() => void retry());
@@ -68,9 +78,57 @@ export function ErrorNotice({
       severity="error"
       floating
       title={title}
-      action={retryable && (onRetry || canRetry) ? <RetryButton retryAfter={retryAfter} onRetry={handler} /> : undefined}
+      action={
+        action ?? (retryable && (onRetry || canRetry) ? <RetryButton retryAfter={retryAfter} onRetry={handler} /> : undefined)
+      }
     >
       {message}
+      {requestId ? (
+        <Box component="span" sx={(t: AtomsTheme) => ({ display: 'block', mt: 0.5, ...mode(t, { color: text.default.b3 }) })}>
+          {labels.errorReference(requestId)}
+        </Box>
+      ) : null}
     </Alert>
+  );
+}
+
+/** A Reconnect button for `connection_required` / `connection_expired`, named after the source. */
+function ReconnectButton({ sourceId }: { sourceId?: string }) {
+  const labels = useLabels();
+  const { reconnect } = useChatActions();
+  const sourceLabel = useSourceLabel(sourceId);
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant="error"
+      appearance="text"
+      loading={busy}
+      onClick={() => {
+        setBusy(true);
+        void reconnect().finally(() => setBusy(false));
+      }}
+    >
+      {labels.reconnect(sourceLabel)}
+    </Button>
+  );
+}
+
+/**
+ * An `ErrorNotice` for a turn's error: Try again (with the `retry_after` countdown), Reconnect
+ * for a connection error, or no button when retrying can't help (sign in, access denied…).
+ */
+export function TurnErrorNotice({ error, title, message }: { error: ChatErrorInfo; title?: ReactNode; message?: ReactNode }) {
+  const runtime = useChatRuntime();
+  const reconnect = error.action === 'reconnect' && runtime.config.canReconnect;
+  return (
+    <ErrorNotice
+      title={title ?? error.message}
+      message={message}
+      retryable={error.action ? error.action === 'retry' : error.retryable !== false}
+      retryAfter={error.retryAfter}
+      action={reconnect ? <ReconnectButton sourceId={error.sourceId} /> : undefined}
+      requestId={error.requestId}
+    />
   );
 }

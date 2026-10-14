@@ -7,7 +7,7 @@ import type { ChatBlock, ChatMessage } from '../../core/store/types';
 import { useChatContext } from '../../react/context';
 import { useLabels, useThread, useThreadMeta } from '../../react/hooks';
 import { Message, MessageBlocks, Suggestions, messageText } from '../../react/primitives';
-import { ErrorNotice } from '../kit/helpers';
+import { ErrorNotice, TurnErrorNotice } from '../kit/helpers';
 import { PulseDot, Shimmer } from '../kit/Shimmer';
 import { mode, type AtomsTheme } from '../kit/tokens';
 import { AttachmentCard } from './Composer';
@@ -109,13 +109,14 @@ export function AssistantTurn({ message }: { message: ChatMessage }) {
       >
         <MessageBlocks />
         {waiting ? <Shimmer>{labels.thinkingLive}</Shimmer> : null}
-        {failed ? (
-          <ErrorNotice
-            title={message.status === 'interrupted' ? labels.interrupted : (message.error?.message ?? labels.interrupted)}
-            message={message.status === 'interrupted' ? message.error?.message : undefined}
-            retryable={message.error?.retryable !== false}
-            retryAfter={message.error?.retryAfter}
+        {failed && message.error ? (
+          <TurnErrorNotice
+            error={message.error}
+            title={message.status === 'interrupted' ? labels.interrupted : message.error.message}
+            message={message.status === 'interrupted' ? message.error.message : undefined}
           />
+        ) : failed ? (
+          <ErrorNotice title={labels.interrupted} />
         ) : null}
         {message.status === 'cancelled' ? (
           <Typography variant="body2" sx={(t: AtomsTheme) => mode(t, { color: text.default.b3 })}>
@@ -164,13 +165,7 @@ export function PendingTurn() {
     <>
       {state.submitting ? <Shimmer>{labels.thinkingLive}</Shimmer> : null}
       <RunStatus />
-      {state.failedBeforeReply ? (
-        <ErrorNotice
-          title={state.failedBeforeReply.message}
-          retryable={state.failedBeforeReply.retryable}
-          retryAfter={state.failedBeforeReply.retryAfter}
-        />
-      ) : null}
+      {state.failedBeforeReply ? <TurnErrorNotice error={state.failedBeforeReply} /> : null}
     </>
   );
 }

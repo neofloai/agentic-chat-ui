@@ -45,6 +45,9 @@ describe('toErrorInfo', () => {
       message: 'slow',
       retryAfter: 3,
       retryable: true,
+      action: 'retry',
+      requestId: null,
+      details: null,
     });
     expect(toErrorInfo(new ChatError('network', 'down'))).toMatchObject({ type: 'network', retryable: true });
     expect(toErrorInfo(new ChatTimeoutError())).toMatchObject({ type: 'timeout', retryable: true });

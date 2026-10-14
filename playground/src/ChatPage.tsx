@@ -1,7 +1,7 @@
 import { Typography } from '@neofloai/atoms';
 import { AgenticChat, createRestAdapter, type Attachment, type ChatAdapter, type ScopeGroup } from '@neofloai/agentic-chat';
 import { chartBlock } from '@neofloai/agentic-chat/charts';
-import { createMockAdapter } from '@neofloai/agentic-chat/mock';
+import { createMockAdapter, type MockAdapter } from '@neofloai/agentic-chat/mock';
 import { useMemo } from 'react';
 
 export const SCOPE_GROUPS: ScopeGroup[] = [
@@ -36,7 +36,7 @@ async function demoUpload(
   return { url: URL.createObjectURL(file), filename: file.name, content_type: file.type, size: file.size, meta: {} };
 }
 
-function makeAdapter(): { adapter: ChatAdapter; real: boolean } {
+function makeAdapter(): { adapter: ChatAdapter; real: boolean; mock?: MockAdapter } {
   // Real-backend mode exists only in local dev; the Pages build compiles this branch away.
   if (!__PAGES__ && import.meta.env.VITE_CHAT_BASE_URL) {
     const token = import.meta.env.VITE_CHAT_TOKEN;
@@ -48,11 +48,12 @@ function makeAdapter(): { adapter: ChatAdapter; real: boolean } {
       }),
     };
   }
-  return { real: false, adapter: createMockAdapter({ persistKey: 'agentic-chat-playground:db' }) };
+  const mock = createMockAdapter({ persistKey: 'agentic-chat-playground:db' });
+  return { real: false, adapter: mock, mock };
 }
 
 export function ChatPage() {
-  const { adapter, real } = useMemo(makeAdapter, []);
+  const { adapter, real, mock } = useMemo(makeAdapter, []);
   return (
     <AgenticChat
       adapter={adapter}
@@ -62,10 +63,18 @@ export function ChatPage() {
       persistence={{ storage: 'local', scope: 'playground', persist: { history: true } }}
       onAction={(action) => console.info('[agentic-chat] onAction', action.name, action.payload)}
       onError={(error, raw) => console.warn(`[agentic-chat] ${error.type}: ${error.message}`, raw)}
+      // A real app hands the credential to its backend here (PUT /v1/connections/{sourceId}).
+      onConnectionRequired={async ({ sourceId }) => {
+        if (!mock || !sourceId) return false;
+        await new Promise((r) => setTimeout(r, 600));
+        mock.connect(sourceId);
+        return true;
+      }}
       composerProps={{
         footer: real ? undefined : (
           <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
-            Demo backend with sample data. Try the suggestions, or ask it to post, reconcile, chart, pick, fail or show a scan.
+            Demo backend with sample data. Try the suggestions, or ask it to post, reconcile, chart, pick, fail, show a scan or
+            search invoice processing.
           </Typography>
         ),
       }}

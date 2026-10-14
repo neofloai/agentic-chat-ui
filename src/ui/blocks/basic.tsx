@@ -3,6 +3,7 @@ import {
   Box,
   Chip,
   CircularProgress,
+  Link,
   List,
   ListItem,
   ListItemButton,
@@ -14,7 +15,14 @@ import {
 import { BrainIcon, FilesIcon, FileTextIcon, WrenchIcon } from '@neofloai/atoms/icons';
 import { text } from '@neofloai/atoms/tokens';
 import { useEffect, useState } from 'react';
-import type { ErrorData, SourcesData, TextData, ThinkingData, ToolCallData } from '../../blocks/parsers';
+import {
+  parseFallback,
+  type ErrorData,
+  type SourcesData,
+  type TextData,
+  type ThinkingData,
+  type ToolCallData,
+} from '../../blocks/parsers';
 import { formatJsonish, humanizeKey } from '../../blocks/format';
 import type { BlockRenderProps } from '../../registry/types';
 import { useLabels } from '../../react/hooks';
@@ -62,11 +70,51 @@ export function ThinkingBlock({ data, status }: BlockRenderProps<ThinkingData>) 
   );
 }
 
+const MAX_RESULTS_SHOWN = 5;
+
+function ToolResults({ results, total }: { results: NonNullable<ToolCallData['results']>; total: number }) {
+  const labels = useLabels();
+  const shown = results.slice(0, MAX_RESULTS_SHOWN);
+  const more = Math.max(0, total - shown.length);
+  return (
+    <Box component="span" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+      <span>{labels.toolResults(total)}</span>
+      {shown.map((r, i) => {
+        const href = safeUrl(r.url);
+        return (
+          <Box component="span" key={`${r.title}:${i}`} sx={{ display: 'block' }}>
+            {href ? (
+              <Link href={href} target="_blank" rel="noopener noreferrer">
+                {r.title}
+              </Link>
+            ) : (
+              r.title
+            )}
+            {r.snippet ? (
+              <Box component="span" sx={(t: AtomsTheme) => ({ display: 'block', ...mode(t, { color: text.default.b3 }) })}>
+                {r.snippet}
+              </Box>
+            ) : null}
+          </Box>
+        );
+      })}
+      {more ? (
+        <Box component="span" sx={(t: AtomsTheme) => mode(t, { color: text.default.b3 })}>
+          {labels.toolMoreResults(more)}
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
 export function ToolBlock({ data }: BlockRenderProps<ToolCallData>) {
   const labels = useLabels();
   const running = data.status === 'running';
   const items: KeyValueItem[] = data.input.map(([k, v]) => ({ key: k, label: humanizeKey(k), value: formatJsonish(v) }));
-  if (data.summary) items.push({ key: '__returned', label: 'returned', value: data.summary });
+  if (data.results) {
+    const total = data.resultCount ?? data.results.length;
+    items.push({ key: '__returned', label: 'returned', value: <ToolResults results={data.results} total={total} /> });
+  } else if (data.summary) items.push({ key: '__returned', label: 'returned', value: data.summary });
   else if (data.output !== undefined && !running)
     items.push({ key: '__returned', label: 'returned', value: formatJsonish(data.output) });
   if (data.error) {
@@ -87,6 +135,8 @@ export function ToolBlock({ data }: BlockRenderProps<ToolCallData>) {
     </Box>
   ) : data.status === 'error' ? (
     <Chip size="sm" variant="error" label={labels.toolFailed} />
+  ) : data.status === 'interrupted' ? (
+    <Chip size="sm" variant="warning" label={labels.toolInterrupted} />
   ) : data.durationMs !== undefined ? (
     formatDuration(data.durationMs)
   ) : undefined;
@@ -161,9 +211,15 @@ export function ErrorBlock({ data, actions }: BlockRenderProps<ErrorData>) {
   );
 }
 
-/** Blocks nobody claimed: raw JSON in development, nothing in production. */
+/**
+ * Blocks nobody claimed. A product's own block (`<product>.<name>`) carries `fallback_text`,
+ * which renders as Markdown everywhere. Anything else shows raw JSON in development and
+ * nothing in production.
+ */
 export function UnknownBlock({ block }: BlockRenderProps) {
   const labels = useLabels();
+  const fallback = parseFallback(block.data).text;
+  if (fallback) return <Markdown>{fallback}</Markdown>;
   if (!isDev()) return null;
   const json = (() => {
     try {

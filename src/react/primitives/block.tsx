@@ -2,7 +2,7 @@ import { Fragment, memo, useContext, useMemo, type ReactNode } from 'react';
 import type { ChatBlock, ChatMessage } from '../../core/store/types';
 import { BlockErrorBoundary } from '../../registry/error-boundary';
 import { BlockContext, ChatContext, MessageContext, useChatContext } from '../context';
-import { useBlockActions } from '../hooks';
+import { useBlockActions, useStoreSelector } from '../hooks';
 import type { ExtendedChatContextValue } from '../provider';
 
 export interface BlockRendererProps {
@@ -82,13 +82,19 @@ export interface MessageBlocksProps {
   renderBlock?: (children: ReactNode, block: ChatBlock) => ReactNode;
 }
 
-/** Renders the current message's blocks, grouping where definitions ask for it. */
+/**
+ * Renders the current message's blocks, grouping where definitions ask for it. A `tool_result`
+ * shown inside its tool call's card is skipped, and so are approval and choice cards when the
+ * backend has `hitl` off.
+ */
 export function MessageBlocks({ filter, renderGroup, renderBlock }: MessageBlocksProps) {
   const msg = useContext(MessageContext);
-  const { registry } = useChatContext();
+  const { registry, runtime } = useChatContext();
+  const hitl = useStoreSelector(runtime.chatConfig, (s) => s.capabilities.hitl);
   if (!msg) throw new Error('[agentic-chat] <Message.Blocks> must be inside <Message.Root>.');
   const { message } = msg;
-  const blocks = filter ? message.blocks.filter(filter) : message.blocks;
+  const visible = message.blocks.filter((b) => !b.pairedWith && (hitl || b.category !== 'hitl'));
+  const blocks = filter ? visible.filter(filter) : visible;
   const streaming = message.status === 'streaming';
 
   const segments: { group?: string; blocks: ChatBlock[] }[] = [];

@@ -1,4 +1,5 @@
-import type { ContentBlock, ContentBlockDelta, StopReason, StreamEvent } from '../protocol/types';
+import type { ContentBlock, ContentBlockDelta, MessageStartEvent, StopReason, StreamEvent } from '../protocol/types';
+import { errorInfoFromCode } from '../runtime/error-info';
 import type { ChatBlock, ChatErrorInfo, ChatMessage, MessageStatus, RunStatus, ThreadState } from './types';
 
 /**
@@ -55,6 +56,72 @@ const RUN_BY_STOP: Record<StopReason, RunStatus> = {
   cancelled: 'idle',
 };
 
+/** Block types that call a tool and can be answered by a `tool_result`. */
+export const TOOL_CALL_TYPES: ReadonlySet<string> = new Set(['tool_use', 'tool_call', 'tool']);
+
+const isToolBlock = (type: string) => type === 'tool_result' || TOOL_CALL_TYPES.has(type);
+
+/**
+ * Pairs each `tool_result` with its tool call (by `tool_use_id`) so both render as one card.
+ * With `ended`, a `tool_use` still without a result is marked `toolResultMissing`. Returns the
+ * same message object when nothing changed, so memoized blocks don't re-render.
+ */
+export function linkToolResults(message: ChatMessage, options: { ended?: boolean } = {}): ChatMessage {
+  const callIds = new Set<string>();
+  for (const b of message.blocks) if (TOOL_CALL_TYPES.has(b.type)) callIds.add(b.id);
+  if (!callIds.size) return message;
+  let changed = false;
+
+  const results = new Map<string, ChatBlock>();
+  const paired = message.blocks.map((b) => {
+    if (b.type !== 'tool_result') return b;
+    const target = typeof b.data.tool_use_id === 'string' && callIds.has(b.data.tool_use_id) ? b.data.tool_use_id : undefined;
+    const next = b.pairedWith === target ? b : { ...b, pairedWith: target };
+    if (next !== b) changed = true;
+    if (target) results.set(target, next);
+    return next;
+  });
+
+  const blocks = paired.map((b) => {
+    if (!TOOL_CALL_TYPES.has(b.type)) return b;
+    const result = results.get(b.id);
+    const missing = result ? undefined : options.ended && b.type === 'tool_use' ? true : b.toolResultMissing;
+    if (b.toolResult === result && b.toolResultMissing === missing) return b;
+    changed = true;
+    const { toolResult: _r, toolResultMissing: _m, ...rest } = b;
+    return { ...rest, ...(result ? { toolResult: result } : {}), ...(missing ? { toolResultMissing: true } : {}) };
+  });
+  return changed ? { ...message, blocks } : message;
+}
+
+/**
+ * Swaps the optimistic user message for the one the server saved: matched by the echoed
+ * `client_message_id`, else the newest unconfirmed user message.
+ */
+function confirmUserMessage(messages: ChatMessage[], event: MessageStartEvent): ChatMessage[] {
+  const serverId = event.user_message_id;
+  let index = -1;
+  if (event.client_message_id) {
+    index = messages.findIndex((m) => m.role === 'user' && m.clientMessageId === event.client_message_id);
+  }
+  if (index < 0 && serverId) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]!.role === 'user' && messages[i]!.local) {
+        index = i;
+        break;
+      }
+    }
+  }
+  if (index < 0) return messages;
+  const m = messages[index]!;
+  // Never take an id another message already has (a replayed or duplicated event).
+  const id = serverId && !messages.some((x, i) => i !== index && x.id === serverId) ? serverId : m.id;
+  if (id === m.id && !m.local) return messages;
+  const next = [...messages];
+  next[index] = { ...m, id, local: false };
+  return next;
+}
+
 function updateMessage(state: ThreadState, messageId: string | undefined, fn: (m: ChatMessage) => ChatMessage): ThreadState {
   if (!messageId) return state;
   let changed = false;
@@ -94,17 +161,28 @@ function ensureAssistantMessage(state: ThreadState, ctx: ReduceContext): ThreadS
 export function reduceStreamEvent(state: ThreadState, event: StreamEvent, ctx: ReduceContext): ThreadState {
   switch (event.type) {
     case 'message_start': {
-      const exists = state.messages.some((m) => m.id === event.message_id);
+      const confirmed = confirmUserMessage(state.messages, event);
+      const exists = confirmed.some((m) => m.id === event.message_id);
       const messages = exists
-        ? state.messages.map((m) => (m.id === event.message_id ? { ...m, status: 'streaming' as const, error: undefined } : m))
+        ? confirmed.map((m) =>
+            m.id === event.message_id
+              ? {
+                  ...m,
+                  status: 'streaming' as const,
+                  error: undefined,
+                  blocks: m.blocks.map((b) => (b.toolResultMissing ? { ...b, toolResultMissing: undefined } : b)),
+                }
+              : m,
+          )
         : [
-            ...state.messages,
+            ...confirmed,
             {
               id: event.message_id,
               role: 'assistant' as const,
               blocks: [],
               status: 'streaming' as const,
               createdAt: new Date(ctx.now).toISOString(),
+              ...(event.run_id ? { runId: event.run_id } : {}),
             },
           ];
       return {
@@ -131,10 +209,10 @@ export function reduceStreamEvent(state: ThreadState, event: StreamEvent, ctx: R
       };
       const next = updateMessage(s, messageId, (m) => {
         const existing = m.blocks.find((b) => b.id === incoming.id);
-        if (existing) {
-          return updateBlock(m, incoming.id, (b) => ({ ...incoming, checkpoint: b.checkpoint, startedAt: b.startedAt }));
-        }
-        return { ...m, blocks: [...m.blocks, incoming] };
+        const updated = existing
+          ? updateBlock(m, incoming.id, (b) => ({ ...incoming, checkpoint: b.checkpoint, startedAt: b.startedAt }))
+          : { ...m, blocks: [...m.blocks, incoming] };
+        return isToolBlock(incoming.type) ? linkToolResults(updated) : updated;
       });
       return { ...next, streamBlockIds: { ...next.streamBlockIds, [event.index]: incoming.id } };
     }
@@ -142,13 +220,15 @@ export function reduceStreamEvent(state: ThreadState, event: StreamEvent, ctx: R
     case 'content_block_delta': {
       const blockId = state.streamBlockIds[event.index];
       if (!blockId) return state;
-      return updateMessage(state, state.run.messageId, (m) =>
-        updateBlock(m, blockId, (b) => {
+      return updateMessage(state, state.run.messageId, (m) => {
+        const updated = updateBlock(m, blockId, (b) => {
           const handler = ctx.resolveDeltaHandler?.(b.data);
           const data = handler?.(b.data, event.delta, event.snapshot) ?? defaultApplyDelta(b.data, event.delta, event.snapshot);
           return data === b.data ? b : { ...b, data };
-        }),
-      );
+        });
+        const block = updated.blocks.find((b) => b.id === blockId);
+        return updated !== m && block && isToolBlock(block.type) ? linkToolResults(updated) : updated;
+      });
     }
 
     case 'content_block_stop': {
@@ -163,10 +243,10 @@ export function reduceStreamEvent(state: ThreadState, event: StreamEvent, ctx: R
           data: { ...event.block, id: blockId },
           completedAt: ctx.now,
         };
-        if (!m.blocks.some((b) => b.id === blockId)) {
-          return { ...m, blocks: [...m.blocks, { ...final, startedAt: ctx.now }] };
-        }
-        return updateBlock(m, blockId, (b) => ({ ...final, checkpoint: b.checkpoint, startedAt: b.startedAt }));
+        const updated = !m.blocks.some((b) => b.id === blockId)
+          ? { ...m, blocks: [...m.blocks, { ...final, startedAt: ctx.now }] }
+          : updateBlock(m, blockId, (b) => ({ ...final, checkpoint: b.checkpoint, startedAt: b.startedAt }));
+        return isToolBlock(final.type) ? linkToolResults(updated) : updated;
       });
       return next.streamBlockIds[event.index]
         ? next
@@ -203,14 +283,20 @@ export function reduceStreamEvent(state: ThreadState, event: StreamEvent, ctx: R
     case 'message_stop': {
       const messageId = event.message_id || state.run.messageId;
       const status = STATUS_BY_STOP[event.stop_reason];
-      let next = updateMessage(state, messageId, (m) => ({
-        ...m,
-        status,
-        stopReason: event.stop_reason,
-        model: event.model ?? m.model,
-        error: event.stop_reason === 'error' ? (m.error ?? state.run.error) : m.error,
-        blocks: m.blocks.map((b) => (b.status === 'streaming' ? { ...b, status: 'complete', completedAt: ctx.now } : b)),
-      }));
+      let next = updateMessage(state, messageId, (m) =>
+        linkToolResults(
+          {
+            ...m,
+            status,
+            stopReason: event.stop_reason,
+            model: event.model ?? m.model,
+            error: event.stop_reason === 'error' ? (m.error ?? state.run.error) : m.error,
+            blocks: m.blocks.map((b) => (b.status === 'streaming' ? { ...b, status: 'complete', completedAt: ctx.now } : b)),
+          },
+          // A paused turn resumes in the same message, so its tools may still answer.
+          { ended: event.stop_reason !== 'paused' },
+        ),
+      );
       if (event.title) next = { ...next, meta: { ...next.meta, title: event.title } };
       const runStatus = RUN_BY_STOP[event.stop_reason];
       return {
@@ -226,12 +312,13 @@ export function reduceStreamEvent(state: ThreadState, event: StreamEvent, ctx: R
     }
 
     case 'error': {
-      const error: ChatErrorInfo = {
-        type: event.error_type,
+      const error: ChatErrorInfo = errorInfoFromCode({
+        code: event.error_type,
         message: event.message,
-        retryAfter: event.retry_after ?? null,
-        retryable: true,
-      };
+        retryAfter: event.retry_after,
+        requestId: event.request_id,
+        details: event.details,
+      });
       const next = updateMessage(state, state.run.messageId, (m) => ({ ...m, error }));
       return { ...next, run: { ...next.run, status: 'error', statusLabel: undefined, error } };
     }
@@ -249,12 +336,15 @@ export function interruptRun(state: ThreadState, error: ChatErrorInfo | undefine
   const messageId = state.run.messageId;
   const next = updateMessage(state, messageId, (m) =>
     m.status === 'streaming'
-      ? {
-          ...m,
-          status: error ? 'interrupted' : 'cancelled',
-          error: error ?? m.error,
-          blocks: m.blocks.map((b) => (b.status === 'streaming' ? { ...b, status: 'interrupted', completedAt: ctx.now } : b)),
-        }
+      ? linkToolResults(
+          {
+            ...m,
+            status: error ? 'interrupted' : 'cancelled',
+            error: error ?? m.error,
+            blocks: m.blocks.map((b) => (b.status === 'streaming' ? { ...b, status: 'interrupted', completedAt: ctx.now } : b)),
+          },
+          { ended: true },
+        )
       : m,
   );
   return {

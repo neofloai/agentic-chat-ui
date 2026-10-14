@@ -49,6 +49,9 @@ export interface ChatLabels {
   thought: string;
   toolRunning: string;
   toolFailed: string;
+  toolInterrupted: string;
+  toolResults: (count: number) => string;
+  toolMoreResults: (count: number) => string;
   rows: (count: number) => string;
   sources: (count: number) => string;
   sourcesTitle: string;
@@ -63,6 +66,11 @@ export interface ChatLabels {
   decisionFailed: string;
   tryAgain: string;
   tryAgainIn: (seconds: number) => string;
+  /** The button on a `connection_required` / `connection_expired` error. */
+  reconnect: (source?: string) => string;
+  /** Under an error, for bug reports. */
+  errorReference: (requestId: string) => string;
+  messageTooLong: (max: number) => string;
   openFull: string;
   close: string;
   download: string;
@@ -131,6 +139,9 @@ export const defaultLabels: ChatLabels = {
   thought: 'Thought',
   toolRunning: 'Running…',
   toolFailed: 'Failed',
+  toolInterrupted: 'Interrupted',
+  toolResults: (n) => (n === 1 ? '1 result' : `${n.toLocaleString()} results`),
+  toolMoreResults: (n) => `and ${n.toLocaleString()} more`,
   rows: (n) => (n === 1 ? '1 row' : `${n.toLocaleString()} rows`),
   sources: (n) => (n === 1 ? '1 source' : `${n} sources`),
   sourcesTitle: 'Sources',
@@ -145,6 +156,9 @@ export const defaultLabels: ChatLabels = {
   decisionFailed: 'Your answer didn’t go through.',
   tryAgain: 'Try again',
   tryAgainIn: (s) => `Try again in ${s}s`,
+  reconnect: (source) => (source ? `Reconnect ${source}` : 'Reconnect'),
+  errorReference: (id) => `Reference: ${id}`,
+  messageTooLong: (max) => `Messages can be up to ${max.toLocaleString()} characters.`,
   openFull: 'Open',
   close: 'Close',
   download: 'Download',

@@ -18,9 +18,12 @@ function AnyMessage() {
   const { message } = useMessage();
   return (
     <Message.Root className={`msg msg-${message.role}`}>
-      {message.blocks.map((b) => (
-        <Block key={b.id} block={b} message={message} />
-      ))}
+      {/* A tool_result paired with its tool_use renders inside that card (Message.Blocks does this for you). */}
+      {message.blocks
+        .filter((b) => !b.pairedWith)
+        .map((b) => (
+          <Block key={b.id} block={b} message={message} />
+        ))}
     </Message.Root>
   );
 }

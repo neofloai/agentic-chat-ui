@@ -3,7 +3,7 @@ import type { ScopeGroup, ScopeSelection } from '../store/types';
 
 /**
  * The composer's workflow picker. Groups are workspaces, items are workflows (the Figma
- * "SourcePicker"). The host supplies the catalog because schema v1 has no endpoint for it.
+ * "SourcePicker"). The host supplies the catalog, or the runtime builds it from the config's `workflows`.
  */
 export interface ScopeConfig {
   groups: ScopeGroup[] | (() => ScopeGroup[] | Promise<ScopeGroup[]>);

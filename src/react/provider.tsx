@@ -77,6 +77,9 @@ export function ChatProvider(props: ChatProviderProps) {
       },
       onEvent: (e, c) => latest.current.onEvent?.(e, c),
       onError: (e, r) => latest.current.onError?.(e, r),
+      onConnectionRequired: options.onConnectionRequired
+        ? async (info) => (await latest.current.onConnectionRequired?.(info)) ?? false
+        : undefined,
       onWarning: (w) => (latest.current.onWarning ? latest.current.onWarning(w) : devWarn(w)),
     });
   });

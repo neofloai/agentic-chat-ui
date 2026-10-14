@@ -2,7 +2,7 @@
 
 # @neofloai/agentic-chat
 
-A React chat UI for agentic assistants. Point it at any backend that implements the **Neoflo chat-layer schema v1**. You get streaming answers, chat history, human-in-the-loop decisions, tool activity, tables, charts and custom cards without building any of it yourself.
+A React chat UI for agentic assistants. Point it at any backend that implements the **Neoflo chat standard** (schema v1, revision 1.2). You get streaming answers, chat history, human-in-the-loop decisions, tool activity, tables, charts and custom cards without building any of it yourself.
 
 It's built on [`@neofloai/atoms`](https://github.com/neofloai/atoms), so it looks like the rest of your Neoflo product in light and dark.
 
@@ -20,6 +20,7 @@ It's built on [`@neofloai/atoms`](https://github.com/neofloai/atoms), so it look
 - **Chat history.** Search, date groups, rename, archive and delete, all with optimistic updates.
 - **Configurable local persistence.** Choose session, local, memory, off, or your own storage, partitioned per user.
 - **Three levels of control.** Use the styled UI, swap parts through slots, or go fully headless with hooks and primitives.
+- **One standard for every product.** Each backend describes itself through `GET /v1/chat/config`, so the same UI hides what a product doesn't support. A conformance check tells a backend team what's left to fix.
 
 ## Contents
 
@@ -36,10 +37,11 @@ It's built on [`@neofloai/atoms`](https://github.com/neofloai/atoms), so it look
 11. [A backend that doesn't follow the schema](#a-backend-that-doesnt-follow-the-schema)
 12. [Driving the chat from your app](#driving-the-chat-from-your-app)
 13. [Mock backend](#mock-backend)
-14. [Server rendering](#server-rendering)
-15. [Troubleshooting](#troubleshooting)
-16. [Versioning](#versioning)
-17. [Contributing](#contributing)
+14. [Checking a backend](#checking-a-backend)
+15. [Server rendering](#server-rendering)
+16. [Troubleshooting](#troubleshooting)
+17. [Versioning](#versioning)
+18. [Contributing](#contributing)
 
 ## Install
 
@@ -61,13 +63,14 @@ Requirements:
 - A `git` binary on machines that install it. `node:*-alpine` and `-slim` images don't ship one (`apk add --no-cache git`).
 - Atoms builds itself on install, so don't run `npm ci --ignore-scripts`.
 
-| Import                            | What it contains                                                           | Needs      |
-| --------------------------------- | -------------------------------------------------------------------------- | ---------- |
-| `@neofloai/agentic-chat`          | `<AgenticChat>`, every UI part and block, plus everything from `/headless` | Atoms      |
-| `@neofloai/agentic-chat/headless` | Runtime, adapters, hooks, primitives, block registry and parsers           | React only |
-| `@neofloai/agentic-chat/core`     | The framework-free engine and schema types                                 | Nothing    |
-| `@neofloai/agentic-chat/charts`   | `chartBlock` (bar, line, area, donut)                                      | `recharts` |
-| `@neofloai/agentic-chat/mock`     | An in-memory schema-v1 backend with demo scenarios                         | Nothing    |
+| Import                               | What it contains                                                           | Needs      |
+| ------------------------------------ | -------------------------------------------------------------------------- | ---------- |
+| `@neofloai/agentic-chat`             | `<AgenticChat>`, every UI part and block, plus everything from `/headless` | Atoms      |
+| `@neofloai/agentic-chat/headless`    | Runtime, adapters, hooks, primitives, block registry and parsers           | React only |
+| `@neofloai/agentic-chat/core`        | The framework-free engine and schema types                                 | Nothing    |
+| `@neofloai/agentic-chat/charts`      | `chartBlock` (bar, line, area, donut)                                      | `recharts` |
+| `@neofloai/agentic-chat/mock`        | An in-memory backend on the standard, with demo scenarios                  | Nothing    |
+| `@neofloai/agentic-chat/conformance` | A check that runs a real backend against the standard (also a CLI)         | Nothing    |
 
 ## Quick start
 
@@ -98,10 +101,11 @@ That's the whole integration. The chat creates a conversation, shows the server'
 
 ## How it talks to your backend
 
-`createRestAdapter` implements the seven endpoints of schema v1:
+`createRestAdapter` implements the endpoints of the chat standard:
 
 | #   | Call                                          | Used for                                                            |
 | --- | --------------------------------------------- | ------------------------------------------------------------------- |
+| 0   | `GET /v1/chat/config`                         | What the backend supports: features, models, sources, limits.       |
 | 1   | `POST /v1/conversation`                       | New chat. The response supplies the greeting and suggested prompts. |
 | 2   | `GET /v1/conversations`                       | The history panel                                                   |
 | 3   | `GET /v1/conversations/{id}`                  | Opening a chat and its messages                                     |
@@ -110,9 +114,14 @@ That's the whole integration. The chat creates a conversation, shows the server'
 | 6   | `POST /v1/conversations/{id}/messages`        | Sending a turn, or resuming a HITL checkpoint. Streamed as SSE.     |
 | 7   | `POST /v1/conversations/{id}/messages/cancel` | The Stop button                                                     |
 
-It reads all nine stream events (`message_start` through `error`), treats `snapshot` as a full overwrite, and ignores event types it doesn't know. A newer backend therefore never breaks an older UI. Identity comes only from your `headers`. The library never puts user or tenant data in a payload.
+It reads all nine stream events (`message_start` through `error`), treats `snapshot` as a full overwrite, and ignores event types it doesn't know. A newer backend therefore never breaks an older UI. Identity comes only from your `headers` or the session cookie. The library never puts user or tenant data in a payload, and never keeps a credential it was handed.
 
-[docs/backend-contract.md](docs/backend-contract.md) is the reference for backend teams. It covers ordering rules, retries and error handling. [docs/block-contracts.md](docs/block-contracts.md) defines the payload of every block type, and [docs/schema-gaps.md](docs/schema-gaps.md) lists what schema v1 doesn't cover yet.
+- **The config decides what shows.** The attach button, the scope picker, Archive and approval cards appear only when the backend's `capabilities` allow them. Model and source labels, the workflow catalog and the message length limit come from the config too. A backend without the endpoint (404) gets the defaults, or whatever you pass as `capabilities`.
+- **Every message has a `client_message_id`.** A retry of a message the server never confirmed reuses it, so a flaky network or a double click never starts two replies. If the server already has it (409 `duplicate_message`), the chat reloads the conversation instead of showing an error.
+- **Errors are read by code first.** `session_busy`, `rate_limited` (with a countdown), `connection_expired` (with Reconnect) and the rest each get the right action; a code the library doesn't know falls back to its HTTP status. Each error keeps the server's `request_id` for bug reports.
+- **Stop matches the backend.** With `cancel: "disconnect"` it closes the stream at once; with `"server"` it calls endpoint 7 first.
+
+[docs/backend-contract.md](docs/backend-contract.md) is the reference for backend teams. It covers auth and credentials, the config, error codes, ordering rules and retries. [docs/block-contracts.md](docs/block-contracts.md) defines the payload of every block type, and [docs/schema-gaps.md](docs/schema-gaps.md) lists what the standard still leaves open.
 
 ## Configuration
 
@@ -136,34 +145,37 @@ Every option works the same on `<AgenticChat>`, `<ChatProvider>` and `createChat
 />
 ```
 
-| Option                                    | Default         | What it does                                                                                                                       |
-| ----------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `adapter`                                 | required        | The backend connection. Use `createRestAdapter` or your own.                                                                       |
-| `runtime`                                 |                 | Pass a runtime you created yourself instead of `adapter`. See [Driving the chat](#driving-the-chat-from-your-app).                 |
-| `blocks`                                  | built-ins       | Extra or replacement block definitions. Later entries win.                                                                         |
-| `scope`                                   | none            | Groups and items for the workflow picker. By default the selection becomes `workflow_context`. Change that with `scope.toRequest`. |
-| `workflowContext`                         | none            | Page context added to every turn. It merges with the scope by `workflow_name`.                                                     |
-| `attachments`                             | off             | `{ upload, accept, maxSize, maxFiles }`. This turns on the paperclip button, drag-and-drop and paste.                              |
-| `persistence`                             | session storage | See [Local persistence](#local-persistence).                                                                                       |
-| `conversationCreation`                    | `'eager'`       | `'eager'` creates the chat when it opens, which is what fetches the greeting. `'lazy'` waits for the first message.                |
-| `hitl.composerWhilePaused`                | `'disabled'`    | Whether people can type while a card waits for a decision.                                                                         |
-| `conversationId` / `onConversationChange` |                 | A controlled active chat, for deep links. `null` means a new chat.                                                                 |
-| `onAction`                                |                 | Receives `actions.emit(name, payload)` from cards.                                                                                 |
-| `onEvent` / `onError` / `onWarning`       |                 | Telemetry hooks for every stream event, error and recoverable warning.                                                             |
-| `labels`                                  | English         | Override any UI string, for copy changes or translation.                                                                           |
-| `streamIdleTimeoutMs`                     | `60000`         | How long a silent stream waits before it counts as dropped and becomes retryable.                                                  |
-| `refreshOnFocus`                          | `true`          | Refresh history when the window regains focus.                                                                                     |
+| Option                                    | Default         | What it does                                                                                                                                                                                                     |
+| ----------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`                                 | required        | The backend connection. Use `createRestAdapter` or your own.                                                                                                                                                     |
+| `runtime`                                 |                 | Pass a runtime you created yourself instead of `adapter`. See [Driving the chat](#driving-the-chat-from-your-app).                                                                                               |
+| `blocks`                                  | built-ins       | Extra or replacement block definitions. Later entries win.                                                                                                                                                       |
+| `scope`                                   | none            | Groups and items for the workflow picker. By default the selection becomes `workflow_context`. Change that with `scope.toRequest`.                                                                               |
+| `workflowContext`                         | none            | Page context added to every turn. It merges with the scope by `workflow_name`.                                                                                                                                   |
+| `attachments`                             | off             | `{ upload, accept, maxSize, maxFiles }`. This turns on the paperclip button, drag-and-drop and paste.                                                                                                            |
+| `persistence`                             | session storage | See [Local persistence](#local-persistence).                                                                                                                                                                     |
+| `conversationCreation`                    | `'eager'`       | `'eager'` creates the chat when it opens, which is what fetches the greeting. `'lazy'` waits for the first message.                                                                                              |
+| `hitl.composerWhilePaused`                | `'disabled'`    | Whether people can type while a card waits for a decision.                                                                                                                                                       |
+| `conversationId` / `onConversationChange` |                 | A controlled active chat, for deep links. `null` means a new chat.                                                                                                                                               |
+| `onAction`                                |                 | Receives `actions.emit(name, payload)` from cards.                                                                                                                                                               |
+| `capabilities`                            | from the config | Feature switches (`hitl`, `attachments`, `workflowContext`, `archive`, `cancel`, `perTurnModel`, `perTurnSources`). They decide what shows until the backend serves its config, then can only turn more off.     |
+| `onConnectionRequired`                    |                 | Called with `{ sourceId, code }` when a send fails with `connection_required` or `connection_expired`. Reconnect (for example `PUT /v1/connections/{sourceId}`), return `true`, and the message is retried once. |
+| `onEvent` / `onError` / `onWarning`       |                 | Telemetry hooks for every stream event, error and recoverable warning.                                                                                                                                           |
+| `labels`                                  | English         | Override any UI string, for copy changes or translation.                                                                                                                                                         |
+| `streamIdleTimeoutMs`                     | `60000`         | How long a silent stream waits before it counts as dropped and becomes retryable.                                                                                                                                |
+| `refreshOnFocus`                          | `true`          | Refresh history when the window regains focus.                                                                                                                                                                   |
 
 `createRestAdapter` options:
 
-| Option                              | What it does                                                                                                                               |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `baseUrl`                           | The API origin. The `/v1/...` paths are appended to it.                                                                                    |
-| `headers`                           | An object or an (async) function, called on every request so tokens stay fresh.                                                            |
-| `onUnauthorized`                    | Called once on a 401. Refresh the session and return `true` to retry that request.                                                         |
-| `retry`                             | `{ retries, baseDelayMs, maxDelayMs }` for idempotent calls on 5xx, 429 and network errors. Message POSTs are never retried automatically. |
-| `paths`                             | Override individual endpoint paths.                                                                                                        |
-| `fetch`, `credentials`, `timeoutMs` | Transport details.                                                                                                                         |
+| Option               | What it does                                                                                                                                                                                                                                 |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseUrl`            | The API origin. The `/v1/...` paths are appended to it.                                                                                                                                                                                      |
+| `headers`            | An object or an (async) function, called on every request so tokens stay fresh.                                                                                                                                                              |
+| `onUnauthorized`     | Called once on a 401 with `{ code, message, requestId }`. `unauthenticated` means sign in again; a product code (`askneo.gate_required`, `askneo.workspace_required`) says where else to send the user. Return `true` to retry that request. |
+| `retry`              | `{ retries, baseDelayMs, maxDelayMs }` for idempotent calls on 5xx, 429 and network errors. Message POSTs are never retried automatically.                                                                                                   |
+| `paths`              | Override individual endpoint paths.                                                                                                                                                                                                          |
+| `credentials`        | `'include'` sends the session cookie when the API is on another origin.                                                                                                                                                                      |
+| `fetch`, `timeoutMs` | Transport details.                                                                                                                                                                                                                           |
 
 ## Chat history
 
@@ -250,22 +262,23 @@ export const amountCard = defineBlock({
 
 ## Blocks
 
-A block is one piece of an answer. The renderer is picked by the block's `type`, falling back to its `category`:
+A block is one piece of an answer. The renderer is picked by the block's `type`, falling back to its `category`. A product's own `<product>.<name>` type never falls back by category: without a registered renderer it shows its `fallback_text`.
 
-| `type` (aliases)                 | Renders                                                         | Payload                                        |
-| -------------------------------- | --------------------------------------------------------------- | ---------------------------------------------- |
-| `text` (`markdown`)              | Markdown on the Atoms type scale. Raw HTML is never rendered.   | [text](docs/block-contracts.md#text)           |
-| `thinking` (`reasoning`)         | "Thought for N seconds". Open while streaming, folds when done. | [thinking](docs/block-contracts.md#thinking)   |
-| `tool_call` (`tool_use`, `tool`) | Tool name, duration, inputs and result                          | [tool_call](docs/block-contracts.md#tool_call) |
-| `table`                          | A titled, sortable result set with a row count                  | [table](docs/block-contracts.md#table)         |
-| `sources` (`citations`)          | What the answer read. Items can link out or be selectable.      | [sources](docs/block-contracts.md#sources)     |
-| `approval`                       | Approve or reject a proposed action (HITL)                      | [approval](docs/block-contracts.md#approval)   |
-| `choice`                         | Single or multi-select question (HITL)                          | [choice](docs/block-contracts.md#choice)       |
-| `error`                          | Failure with a Try again button that respects `retry_after`     | [error](docs/block-contracts.md#error)         |
-| `artifact` (`document`)          | A generated file with a preview, full view and download         | [artifact](docs/block-contracts.md#artifact)   |
-| `image`                          | An image with a caption that opens larger                       | [image](docs/block-contracts.md#image)         |
-| `plan` (`steps`)                 | The agent's steps as a live stepper                             | [plan](docs/block-contracts.md#plan)           |
-| `chart`                          | Bar, line, area and donut in Atoms colors (`/charts`)           | [chart](docs/block-contracts.md#chart)         |
+| `type` (aliases)           | Renders                                                                                            | Payload                                                      |
+| -------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `text` (`markdown`)        | Markdown on the Atoms type scale. Raw HTML is never rendered.                                      | [text](docs/block-contracts.md#text)                         |
+| `thinking` (`reasoning`)   | "Thought for N seconds". Open while streaming, folds when done.                                    | [thinking](docs/block-contracts.md#thinking)                 |
+| `tool_use` + `tool_result` | One card per tool call: name, inputs, results, duration. "Interrupted" when the result never came. | [tool_use](docs/block-contracts.md#tool_use-and-tool_result) |
+| `tool_call` (`tool`)       | The older single-block form of the same card                                                       | [tool_call](docs/block-contracts.md#tool_call)               |
+| `table`                    | A titled, sortable result set with a row count                                                     | [table](docs/block-contracts.md#table)                       |
+| `sources` (`citations`)    | What the answer read. Items can link out or be selectable.                                         | [sources](docs/block-contracts.md#sources)                   |
+| `approval`                 | Approve or reject a proposed action (HITL)                                                         | [approval](docs/block-contracts.md#approval)                 |
+| `choice`                   | Single or multi-select question (HITL)                                                             | [choice](docs/block-contracts.md#choice)                     |
+| `error`                    | Failure with a Try again button that respects `retry_after`                                        | [error](docs/block-contracts.md#error)                       |
+| `artifact` (`document`)    | A generated file with a preview, full view and download                                            | [artifact](docs/block-contracts.md#artifact)                 |
+| `image`                    | An image with a caption that opens larger                                                          | [image](docs/block-contracts.md#image)                       |
+| `plan` (`steps`)           | The agent's steps as a live stepper                                                                | [plan](docs/block-contracts.md#plan)                         |
+| `chart`                    | Bar, line, area and donut in Atoms colors (`/charts`)                                              | [chart](docs/block-contracts.md#chart)                       |
 
 ### Custom blocks
 
@@ -363,9 +376,12 @@ function AnyMessage() {
   const { message } = useMessage();
   return (
     <Message.Root>
-      {message.blocks.map((b) => (
-        <Block key={b.id} block={b} message={message} />
-      ))}
+      {/* A tool_result paired with its tool_use renders inside that card (Message.Blocks does this for you). */}
+      {message.blocks
+        .filter((b) => !b.pairedWith)
+        .map((b) => (
+          <Block key={b.id} block={b} message={message} />
+        ))}
     </Message.Root>
   );
 }
@@ -392,7 +408,7 @@ export function MyChat() {
 ```
 
 - **Primitives.** `Thread`, `Message`, `Composer`, `Suggestions`, `ConversationList` and `Hitl` accept normal HTML props and `asChild`, and expose `data-*` state attributes for styling.
-- **Hooks.** `useThread`, `useMessages`, `useRun`, `useComposer`, `useConversations`, `useScope`, `useHitl`, `useChatActions`, `usePreference` and `useChatEvent`.
+- **Hooks.** `useThread`, `useMessages`, `useRun`, `useComposer`, `useConversations`, `useScope`, `useHitl`, `useChatActions`, `useChatConfig`, `useCapabilities`, `usePreference` and `useChatEvent`.
 
 See [docs/headless.md](docs/headless.md).
 
@@ -447,11 +463,11 @@ await chat.persistence.clear();
 chat.dispose();
 ```
 
-The runtime also exposes `cancel`, `retry`, `resume`, `selectConversation`, `renameConversation`, `deleteConversation`, `setModel` and `on('event' | 'error' | 'warning' | 'activeChange', listener)`. Several runtimes can share a page.
+The runtime also exposes `cancel`, `retry`, `reconnect`, `resume`, `selectConversation`, `renameConversation`, `deleteConversation`, `setModel`, `setDefaultSources`, `loadConfig`, the `chatConfig` store and `on('event' | 'error' | 'warning' | 'activeChange', listener)`. Several runtimes can share a page.
 
 ## Mock backend
 
-`@neofloai/agentic-chat/mock` runs a schema-v1 backend in memory. Use it to build UI before the API exists, in tests, and in demos. The [live demo](https://neofloai.github.io/agentic-chat-ui/#/chat) runs on it.
+`@neofloai/agentic-chat/mock` runs a backend on the standard in memory: the config endpoint, `selected_model`, `client_message_id` with duplicate detection, error envelopes and paired tool calls. Use it to build UI before the API exists, in tests, and in demos. The [live demo](https://neofloai.github.io/agentic-chat-ui/#/chat) runs on it.
 
 ```tsx
 import { createMockAdapter } from '@neofloai/agentic-chat/mock';
@@ -472,14 +488,33 @@ const adapter = createMockAdapter({
 });
 ```
 
-The writer has `status`, `text`, `thinking`, `block` (with streamed `snapshots`), `pause` (a HITL checkpoint with an `onResume` continuation), `error` and `wait`. Cancel and abort work the same as on a real backend.
+The writer has `status`, `text`, `thinking`, `tool` (a `tool_use` and its `tool_result`), `block` (with streamed `snapshots`), `pause` (a HITL checkpoint with an `onResume` continuation), `error` and `wait`. Cancel and abort work the same as on a real backend.
+
+Pass `config` to change what the mock's config reports (`null` behaves like a backend without one). Its invoice-processing connection starts expired, so a prompt that mentions "invoice processing" fails with `connection_expired` until something calls `adapter.connect('invoice_processing')`, which is how the demo shows Reconnect.
+
+## Checking a backend
+
+`@neofloai/agentic-chat/conformance` calls a backend the way the chat will and reports every gap against the standard: missing endpoints, identity fields or credentials in bodies, `model` instead of `selected_model`, a stream that doesn't echo `client_message_id`, tools without exactly one result, error bodies outside the envelope, and more. It creates one conversation, sends one message and deletes the conversation. Run it in CI against a dev or staging deployment:
+
+```bash
+npx agentic-chat-conformance --base-url https://askneo.dev.example --header "Cookie: session=$SESSION"
+```
+
+```ts
+import { formatReport, runConformance } from '@neofloai/agentic-chat/conformance';
+
+const report = await runConformance({ baseUrl, headers: { Authorization: `Bearer ${token}` } });
+if (!report.ok) throw new Error(formatReport(report));
+```
+
+Failures break the contract; warnings don't fail the run. Sending a message calls the model, so pass `--no-messages` (or `sendMessages: false`) for a run that mustn't. [docs/backend-contract.md](docs/backend-contract.md#8-conformance-check) has the details.
 
 ## Server rendering
 
 The library is plain React and works in any React app. If yours renders on the server:
 
 - Nothing touches `window` or storage at import time or during server render. Persistence hydrates on the client.
-- The React entry points (`.`, `/headless`, `/charts`) are marked `"use client"`. `/core` and `/mock` contain no React, so they can also run in server code.
+- The React entry points (`.`, `/headless`, `/charts`) are marked `"use client"`. `/core`, `/mock` and `/conformance` contain no React, so they can also run in server code.
 - Create the adapter and render `<AgenticChat>` in a client component. An adapter holds functions, and functions can't be passed as props from server-rendered components.
 
 ## Troubleshooting
@@ -493,6 +528,9 @@ The library is plain React and works in any React app. If yours renders on the s
 | An "Unsupported content: …" box                                           | The backend sent a block type nothing renders. Register a `defineBlock` for it. The box only shows in development. |
 | Cards do nothing when clicked                                             | Handle `onAction`. Cards emit, and your app decides.                                                               |
 | A 401 loop                                                                | Return `false` from `onUnauthorized` when the refresh fails. The error then surfaces instead of retrying.          |
+| No attach button, scope picker, Archive or approval cards                 | The backend's config turns them off. Check `useCapabilities()`, or the config endpoint's `capabilities`.           |
+| A connection error with no Reconnect button                               | Pass `onConnectionRequired`. Without it the chat can only show the message.                                        |
+| A tool card says "Interrupted"                                            | The reply ended without that tool's `tool_result`. Every `tool_use` needs exactly one, including on error.         |
 
 ## Versioning
 
@@ -522,6 +560,7 @@ src/blocks      block parsers shared by every renderer
 src/ui          the Atoms UI: shell, blocks, history, kit
 src/charts      chart blocks (Recharts)
 src/mock        the in-memory backend
+src/conformance the backend conformance check and its CLI
 playground      the demo app and component gallery (GitHub Pages)
 examples        the README's code, type-checked in CI
 docs            contracts and guides

@@ -1,5 +1,6 @@
 import type {
   CancelResult,
+  ChatConfig,
   ConversationBootstrap,
   ConversationDetail,
   ConversationPatch,
@@ -23,10 +24,15 @@ export interface SendMessageOptions {
 
 /**
  * The single seam between the chat UI and a backend. `createRestAdapter` implements it for
- * any schema-v1 server. A backend that doesn't follow the schema can still plug in by
+ * any backend on the chat standard. A backend that doesn't follow it can still plug in by
  * implementing this interface and mapping its own payloads.
  */
 export interface ChatAdapter {
+  /**
+   * Endpoint 0: GET /v1/chat/config. Resolve `null` when the backend has no config endpoint;
+   * the runtime then uses the host's `capabilities` option. Optional for custom adapters.
+   */
+  getConfig?(): Promise<ChatConfig | null>;
   /** Row 1: POST /v1/conversation */
   createConversation(): Promise<ConversationBootstrap>;
   /** Row 2: GET /v1/conversations */

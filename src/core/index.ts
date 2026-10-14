@@ -17,10 +17,18 @@ export {
   interruptRun,
   defaultApplyDelta,
   textFieldOf,
+  linkToolResults,
+  TOOL_CALL_TYPES,
   type DeltaHandler,
   type ReduceContext,
 } from './store/stream-reducer';
-export { normalizeMessages, normalizeConversationDetail, toConversationItem, metaFromBootstrap } from './store/normalize';
+export {
+  normalizeMessages,
+  normalizeConversationDetail,
+  toConversationItem,
+  metaFromBootstrap,
+  selectedModelOf,
+} from './store/normalize';
 export { groupConversations, filterConversations, sortConversations, groupKeyFor } from './store/conversations';
 
 export {
@@ -37,7 +45,16 @@ export {
   type RuntimeEvents,
   type RuntimeWarning,
   type AddAttachmentsResult,
+  type ConnectionRequiredInfo,
 } from './runtime/runtime';
+export {
+  normalizeConfig,
+  resolveCapabilities,
+  scopeGroupsFromWorkflows,
+  stripCredentials,
+  knownSources,
+  type CapabilityOverrides,
+} from './runtime/config';
 export {
   defaultScopeToRequest,
   mergeWorkflowContexts,
@@ -46,4 +63,4 @@ export {
   type ScopeConfig,
   type ScopeSummary,
 } from './runtime/scope';
-export { toErrorInfo } from './runtime/error-info';
+export { toErrorInfo, errorInfoFromCode, type ErrorCodeInput } from './runtime/error-info';
