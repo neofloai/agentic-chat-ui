@@ -458,10 +458,25 @@ class Runtime implements ChatRuntime {
           const t = this.thread(activeId);
           this.setActive(activeId);
           await this.loadThread(t, false, true);
-          if (this.thread(activeId).store.getState().loadStatus === 'error' && this.session.getState().activeId === activeId) {
+          const restored = this.thread(activeId);
+          const st = restored.store.getState();
+          if (st.loadStatus === 'error' && this.session.getState().activeId === activeId) {
             // The remembered conversation is gone; start fresh rather than showing an error.
             if (this.config.conversationCreation === 'eager') await this.newConversation().catch(() => undefined);
             else this.setActive(null);
+          } else if (
+            this.config.conversationCreation === 'eager' &&
+            this.session.getState().activeId === activeId &&
+            st.loadStatus === 'ready' &&
+            st.messages.length === 0 &&
+            !isBusy(st) &&
+            !restored.composer.getState().text.trim() &&
+            !st.meta.greeting &&
+            st.meta.suggestedPrompts.length === 0
+          ) {
+            // An empty chat from before the reload. Endpoint 3 doesn't return the greeting or the
+            // suggested prompts, so open a new chat that has them instead of a blank one.
+            await this.newConversation().catch(() => undefined);
           }
         } else if (this.config.conversationCreation === 'eager') {
           await this.newConversation().catch(() => undefined);
@@ -687,7 +702,11 @@ class Runtime implements ChatRuntime {
       this.setActive(id);
       return id;
     }
-    if (this.creating) return this.creating;
+    if (this.creating) {
+      // A chat is already being created: show it, as the first click did. It opens when it arrives.
+      this.setActive(null);
+      return this.creating;
+    }
     const draft = this.thread(null);
     this.setActive(null);
     draft.store.setState((s) => ({ ...s, loadStatus: 'loading', loadError: undefined }));

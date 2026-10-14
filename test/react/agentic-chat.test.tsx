@@ -23,9 +23,10 @@ describe('<AgenticChat>', () => {
     // The user's turn shows the prompt text, not the chip label.
     expect(await screen.findByText('Which invoices are still waiting on me?')).toBeTruthy();
     expect(await screen.findByText(/Four are waiting on you/, undefined, { timeout: 4000 })).toBeTruthy();
-    expect(screen.getByText('Held invoices')).toBeTruthy();
+    // The text streams in first; the table and sources blocks come after it.
+    expect(await screen.findByText('Held invoices', undefined, { timeout: 4000 })).toBeTruthy();
     expect(screen.getByText('search_invoices')).toBeTruthy();
-    expect(screen.getByText('3 sources')).toBeTruthy();
+    expect(await screen.findByText('3 sources', undefined, { timeout: 4000 })).toBeTruthy();
   });
 
   it('sends on Enter but not on Shift+Enter, and clears the composer', async () => {

@@ -7,7 +7,7 @@ import {
   type ChatRuntimeOptions,
   type StreamEvent,
 } from '../../src/core';
-import { createFakeAdapter, hitlPause, hitlResume, normalTurn, tick, until, type FakeAdapter } from '../fixtures';
+import { createFakeAdapter, detail, hitlPause, hitlResume, normalTurn, tick, until, type FakeAdapter } from '../fixtures';
 
 const scope: ChatRuntimeOptions['scope'] = {
   groups: [
@@ -453,6 +453,94 @@ describe('runtime: persistence', () => {
     expect(storage.keys().length).toBeGreaterThan(0);
     await runtime.persistence.clear();
     expect(storage.keys()).toEqual([]);
+  });
+});
+
+describe('runtime: new chat', () => {
+  /** An adapter whose second create waits until the test releases it. */
+  function slowSecondCreate() {
+    let release!: () => void;
+    const base = createFakeAdapter();
+    let calls = 0;
+    const adapter = createFakeAdapter({
+      createConversation: async () => {
+        calls++;
+        if (calls > 1) await new Promise<void>((r) => (release = r));
+        return base.createConversation();
+      },
+    });
+    return { adapter, release: () => release() };
+  }
+
+  it('opens the chat being created when New chat is clicked again from another chat', async () => {
+    const { adapter, release } = slowSecondCreate();
+    const { runtime, thread } = setup({}, adapter);
+    await runtime.start();
+    runtime.setDraft('not sent yet', 'conv_1'); // so conv_1 isn't reused as the empty chat
+    await runtime.selectConversation('h8k2mfa931');
+    const first = runtime.newConversation();
+    await runtime.selectConversation('h8k2mfa931');
+    const second = runtime.newConversation();
+    expect(runtime.session.getState().activeId).toBeNull();
+    expect(thread().loadStatus).toBe('loading');
+    release();
+    await Promise.all([first, second]);
+    expect(runtime.session.getState().activeId).toBe('conv_2');
+    expect(thread().meta.suggestedPrompts).toHaveLength(1);
+  });
+
+  it('leaves a deleted chat for the one being created', async () => {
+    const { adapter, release } = slowSecondCreate();
+    const { runtime } = setup({}, adapter);
+    await runtime.start();
+    runtime.setDraft('not sent yet', 'conv_1');
+    await runtime.selectConversation('h8k2mfa931');
+    const pending = runtime.newConversation();
+    await runtime.selectConversation('h8k2mfa931');
+    const removed = runtime.deleteConversation('h8k2mfa931');
+    expect(runtime.session.getState().activeId).toBeNull();
+    release();
+    await Promise.all([pending, removed]);
+    expect(runtime.session.getState().activeId).toBe('conv_2');
+  });
+
+  it('replaces an empty chat restored after a reload with a new one that has its suggestions', async () => {
+    const storage = createMemoryStorage();
+    const opts = { persistence: { storage, debounceMs: 1 } } satisfies Partial<ChatRuntimeOptions>;
+    const first = setup(opts);
+    await first.runtime.start();
+    expect(first.thread().meta.suggestedPrompts).toHaveLength(1);
+    await first.runtime.persistence.flush();
+    first.runtime.dispose();
+
+    // Endpoint 3 has no greeting or suggested prompts.
+    const empty = createFakeAdapter({ getConversation: async (id) => ({ ...detail(id), messages: [] }) });
+    let n = 0;
+    empty.createConversation = async () => ({
+      ...(await createFakeAdapter().createConversation()),
+      conversation_id: `fresh_${++n}`,
+    });
+    const second = setup(opts, empty);
+    await second.runtime.start();
+    expect(second.runtime.session.getState().activeId).toBe('fresh_1');
+    expect(second.thread().meta.suggestedPrompts).toHaveLength(1);
+  });
+
+  it('keeps a restored empty chat that has a draft', async () => {
+    const storage = createMemoryStorage();
+    const opts = { persistence: { storage, debounceMs: 1 } } satisfies Partial<ChatRuntimeOptions>;
+    const first = setup(opts);
+    await first.runtime.start();
+    first.runtime.setDraft('half-typed question');
+    await first.runtime.persistence.flush();
+    first.runtime.dispose();
+
+    const empty = createFakeAdapter({ getConversation: async (id) => ({ ...detail(id), messages: [] }) });
+    const second = setup(opts, empty);
+    await second.runtime.start();
+    expect(second.runtime.session.getState().activeId).toBe('conv_1');
+    expect(second.adapter.created).toBe(0);
+    expect(second.runtime.activeThread().composer.getState().text).toBe('half-typed question');
   });
 });
 
