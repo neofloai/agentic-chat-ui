@@ -2,8 +2,9 @@
 // Publishes the current package.json version as a git tag that carries a prebuilt dist/.
 //
 // Consumers install with `npm i github:neofloai/agentic-chat-ui#semver:^X.Y.Z`. npm resolves the
-// range against tags and installs that commit as-is (there is no `prepare` build), so the tag
-// commit must contain dist/. main never does: the release commit is created detached from it.
+// range against tags. The `prepare` build also lets a branch or commit install from git, but the
+// tag still carries dist/ so a release never depends on building on the consumer's machine.
+// main never contains dist/: the release commit is created detached from it.
 //
 // Run by .github/workflows/release.yml after a Changesets version PR merges. Safe to re-run:
 // an existing tag is left alone.

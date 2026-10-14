@@ -62,6 +62,7 @@ Requirements:
 - React 18.2 or 19.
 - A `git` binary on machines that install it. `node:*-alpine` and `-slim` images don't ship one (`apk add --no-cache git`).
 - Atoms builds itself on install, so don't run `npm ci --ignore-scripts`.
+- To try unreleased work, install a branch or commit (`github:neofloai/agentic-chat-ui#<branch>`). The package builds itself on install, the same way Atoms does.
 
 | Import                               | What it contains                                                           | Needs      |
 | ------------------------------------ | -------------------------------------------------------------------------- | ---------- |
