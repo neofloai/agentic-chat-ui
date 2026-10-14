@@ -51,7 +51,7 @@ The package installs straight from GitHub. It has no registry, needs no token, a
 npm install github:neofloai/agentic-chat-ui#semver:^0.1.0
 
 # The UI is built on Atoms (skip it if you only use /headless or /core)
-npm install github:neofloai/atoms#semver:^2.1.0
+npm install github:neofloai/atoms#semver:^3.0.0
 
 # Only if you use the chart blocks
 npm install recharts
