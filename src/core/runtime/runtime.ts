@@ -3,6 +3,7 @@ import type {
   ContentBlock,
   ConversationBootstrap,
   ConversationSummary,
+  Ext,
   HitlDecision,
   SendMessageBody,
   Source,
@@ -15,10 +16,12 @@ import { createPersister, type PersistenceOptions, type Persister } from '../per
 import { isPromise } from '../persistence/storage';
 import { createStore, frameScheduler, type Scheduler, type Store } from '../store/store';
 import { interruptRun, reduceStreamEvent, type DeltaHandler } from '../store/stream-reducer';
-import { metaFromBootstrap, normalizeConversationDetail, toConversationItem } from '../store/normalize';
+import { metaFromBootstrap, normalizeConversationDetail, selectedModelOf, toConversationItem } from '../store/normalize';
 import { sortConversations } from '../store/conversations';
 import {
   createThreadState,
+  type Capabilities,
+  type ChatConfigState,
   type ChatErrorInfo,
   type ChatMessage,
   type ComposerAttachment,
@@ -31,6 +34,14 @@ import {
   type ScopeState,
   type ThreadState,
 } from '../store/types';
+import {
+  knownSources,
+  normalizeConfig,
+  resolveCapabilities,
+  scopeGroupsFromWorkflows,
+  stripCredentials,
+  type CapabilityOverrides,
+} from './config';
 import { toErrorInfo } from './error-info';
 import {
   defaultScopeToRequest,
@@ -71,9 +82,23 @@ export interface RuntimeWarning {
     | 'awaiting_decision'
     | 'unknown_checkpoint'
     | 'revalidate_failed'
-    | 'cancel_failed';
+    | 'cancel_failed'
+    | 'config_failed'
+    | 'feature_disabled'
+    | 'unknown_source'
+    | 'message_too_long'
+    | 'duplicate_message';
   message: string;
   data?: unknown;
+}
+
+/** What `onConnectionRequired` gets when a send fails with `connection_required` or `connection_expired`. */
+export interface ConnectionRequiredInfo {
+  /** `details.source` from the error, e.g. `invoice_processing`. `null` if the server didn't say. */
+  sourceId: string | null;
+  code: string;
+  message: string;
+  conversationId: string | null;
 }
 
 export interface ChatRuntimeOptions {
@@ -86,6 +111,18 @@ export interface ChatRuntimeOptions {
   workflowContext?: WorkflowContext[] | (() => WorkflowContext[] | undefined);
   /** Enables the attach button. The schema has no upload endpoint, so the host uploads. */
   attachments?: AttachmentOptions;
+  /**
+   * Feature switches. Until the backend serves `GET /v1/chat/config` they decide what the UI
+   * shows; once it does, the config decides and these can only turn more off.
+   */
+  capabilities?: CapabilityOverrides;
+  /**
+   * Called when a send fails because a connected system needs (re)connecting. Hand the
+   * credential to your backend (for example `PUT /v1/connections/{sourceId}`) and return `true`:
+   * the library then retries the message once. Return `false` to leave the error on screen,
+   * where a Reconnect button calls this again.
+   */
+  onConnectionRequired?: (info: ConnectionRequiredInfo) => boolean | Promise<boolean>;
   /**
    * `eager` creates the conversation as soon as a new chat opens, which is what gets the
    * server's greeting and suggested prompts. `lazy` waits for the first message.
@@ -114,11 +151,15 @@ export interface ChatRuntimeOptions {
 export interface SendOptions {
   /** Defaults to the active conversation. */
   conversationId?: string | null;
-  /** Per-turn source override. */
+  /** Per-turn source override. Ids the config doesn't list are left out. */
   sources?: Source[];
   /** Defaults to the composer's uploaded attachments. */
   attachments?: Attachment[];
   workflowContext?: WorkflowContext[];
+  /** A per-turn model. Defaults to the conversation's model when the backend takes one per turn. */
+  model?: string;
+  /** Product-only inputs, sent as the body's `ext`. */
+  ext?: Ext;
 }
 
 export interface ThreadHandle {
@@ -149,6 +190,8 @@ export interface AddAttachmentsResult {
 
 export interface ChatRuntime {
   readonly adapter: ChatAdapter;
+  /** The backend's config (endpoint 0) and the capabilities the UI uses. */
+  readonly chatConfig: Store<ChatConfigState>;
   readonly conversations: Store<ConversationsState>;
   readonly session: Store<SessionState>;
   readonly scope: Store<ScopeState>;
@@ -158,10 +201,14 @@ export interface ChatRuntime {
     composerWhilePaused: 'disabled' | 'enabled';
     attachments?: Pick<AttachmentOptions, 'accept' | 'maxSize' | 'maxFiles'>;
     hasScope: boolean;
+    /** Whether a Reconnect button can do anything (`onConnectionRequired` is set). */
+    canReconnect: boolean;
   };
 
-  /** Hydrates, loads history and opens the active chat. Safe to call more than once. */
+  /** Loads the config, hydrates, loads history and opens the active chat. Safe to call more than once. */
   start(): Promise<void>;
+  /** Fetches `GET /v1/chat/config` again. `start()` calls it once; the result is kept for the session. */
+  loadConfig(): Promise<void>;
   getThread(conversationId: string | null): ThreadHandle;
   activeThread(): ThreadHandle;
 
@@ -179,6 +226,11 @@ export interface ChatRuntime {
   cancel(conversationId?: string | null): Promise<void>;
   retry(conversationId?: string | null): Promise<void>;
   canRetry(conversationId?: string | null): boolean;
+  /**
+   * For a turn that failed with `connection_required` / `connection_expired`: calls
+   * `onConnectionRequired`, and retries the message if it returns `true`. Resolves whether it retried.
+   */
+  reconnect(conversationId?: string | null): Promise<boolean>;
 
   setDraft(text: string, conversationId?: string | null): void;
   addAttachments(files: Iterable<File>, conversationId?: string | null): AddAttachmentsResult;
@@ -209,9 +261,16 @@ interface InternalThread extends ThreadHandle {
   abortReason?: 'timeout' | 'dispose' | 'deleted';
   cancelRequested: boolean;
   cancelTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * The last turn, for Retry. `confirmed` means the server saved the user message
+   * (`message_start` arrived), so a retry needs a new `client_message_id`; otherwise it reuses
+   * the id and the server drops a duplicate.
+   */
   lastRequest?:
-    | { kind: 'send'; body: SendMessageBody; userMessageId: string }
+    | { kind: 'send'; body: SendMessageBody; clientMessageId: string; confirmed: boolean }
     | { kind: 'resume'; body: SendMessageBody; checkpointId: string };
+  /** The automatic retry after `onConnectionRequired` already ran for this turn. */
+  reconnectTried?: boolean;
   loadToken: number;
   /** Created on the server this session and not yet written to. */
   fresh: boolean;
@@ -294,8 +353,12 @@ function mergeLocalCheckpoints(prev: ChatMessage[], next: ChatMessage[]): ChatMe
   }));
 }
 
+/** How long a send waits for a config that's still loading before going ahead without it. */
+const CONFIG_WAIT_MS = 3_000;
+
 class Runtime implements ChatRuntime {
   readonly adapter: ChatAdapter;
+  readonly chatConfig: Store<ChatConfigState>;
   readonly conversations: Store<ConversationsState>;
   readonly session: Store<SessionState>;
   readonly scope: Store<ScopeState>;
@@ -321,6 +384,8 @@ class Runtime implements ChatRuntime {
   private listToken = 0;
   private lastFocusRefresh = 0;
   private startPromise?: Promise<void>;
+  private configPromise?: Promise<void>;
+  private readonly warnedOnce = new Set<string>();
   private creating?: Promise<string>;
   private readonly hydration: Promise<void>;
   private disposed = false;
@@ -339,6 +404,7 @@ class Runtime implements ChatRuntime {
         ? { accept: options.attachments.accept, maxSize: options.attachments.maxSize, maxFiles: options.attachments.maxFiles }
         : undefined,
       hasScope: Boolean(options.scope),
+      canReconnect: Boolean(options.onConnectionRequired),
     };
     this.persister = createPersister(
       options.persistence,
@@ -352,10 +418,19 @@ class Runtime implements ChatRuntime {
       flush: () => this.persister.flush(),
     };
 
+    this.chatConfig = createStore<ChatConfigState>(
+      { status: 'idle', capabilities: resolveCapabilities('idle', undefined, options.capabilities) },
+      this.scheduler,
+    );
     this.conversations = createStore<ConversationsState>({ items: [], status: 'idle', runningIds: [] }, this.scheduler);
     this.session = createStore<SessionState>({ activeKey: NEW_THREAD_KEY, activeId: null, hydrated: false }, this.scheduler);
     this.scope = createStore<ScopeState>(
-      { groups: [], selection: {}, status: options.scope ? 'loading' : 'ready' },
+      {
+        groups: [],
+        selection: {},
+        status: options.scope ? 'loading' : 'ready',
+        ...(options.scope ? { origin: 'host' as const } : {}),
+      },
       this.scheduler,
     );
     this.preferences = createStore<Record<string, unknown>>({}, this.scheduler);
@@ -372,6 +447,7 @@ class Runtime implements ChatRuntime {
   start(): Promise<void> {
     if (!this.startPromise) {
       this.startPromise = (async () => {
+        const config = this.loadConfig();
         await this.hydration;
         if (this.disposed) return;
         this.listenForFocus();
@@ -382,18 +458,112 @@ class Runtime implements ChatRuntime {
           const t = this.thread(activeId);
           this.setActive(activeId);
           await this.loadThread(t, false, true);
-          if (this.thread(activeId).store.getState().loadStatus === 'error' && this.session.getState().activeId === activeId) {
+          const restored = this.thread(activeId);
+          const st = restored.store.getState();
+          if (st.loadStatus === 'error' && this.session.getState().activeId === activeId) {
             // The remembered conversation is gone; start fresh rather than showing an error.
             if (this.config.conversationCreation === 'eager') await this.newConversation().catch(() => undefined);
             else this.setActive(null);
+          } else if (
+            this.config.conversationCreation === 'eager' &&
+            this.session.getState().activeId === activeId &&
+            st.loadStatus === 'ready' &&
+            st.messages.length === 0 &&
+            !isBusy(st) &&
+            !restored.composer.getState().text.trim() &&
+            !st.meta.greeting &&
+            st.meta.suggestedPrompts.length === 0
+          ) {
+            // An empty chat from before the reload. Endpoint 3 doesn't return the greeting or the
+            // suggested prompts, so open a new chat that has them instead of a blank one.
+            await this.newConversation().catch(() => undefined);
           }
         } else if (this.config.conversationCreation === 'eager') {
           await this.newConversation().catch(() => undefined);
         }
-        await list;
+        await Promise.all([list, config]);
       })();
     }
     return this.startPromise;
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // Config (endpoint 0)
+  // ------------------------------------------------------------------------------------------
+
+  loadConfig(): Promise<void> {
+    if (this.configPromise && this.chatConfig.getState().status === 'loading') return this.configPromise;
+    const getConfig = this.adapter.getConfig?.bind(this.adapter);
+    const host = this.options.capabilities;
+    if (!getConfig) {
+      this.chatConfig.setState({ status: 'unavailable', capabilities: resolveCapabilities('unavailable', undefined, host) });
+      this.configPromise = Promise.resolve();
+      return this.configPromise;
+    }
+    this.chatConfig.setState((s) => ({ ...s, status: 'loading', error: undefined }));
+    this.configPromise = (async () => {
+      try {
+        const config = normalizeConfig(await getConfig());
+        if (this.disposed) return;
+        if (!config) {
+          this.chatConfig.setState({ status: 'unavailable', capabilities: resolveCapabilities('unavailable', undefined, host) });
+          return;
+        }
+        this.chatConfig.setState({ status: 'ready', config, capabilities: resolveCapabilities('ready', config, host) });
+        this.applyConfigScope();
+      } catch (error) {
+        if (this.disposed) return;
+        const info = toErrorInfo(error);
+        this.chatConfig.setState({ status: 'error', error: info, capabilities: resolveCapabilities('error', undefined, host) });
+        this.warn({ code: 'config_failed', message: 'Could not load the chat config; using the default features.', data: info });
+      }
+    })();
+    return this.configPromise;
+  }
+
+  private capabilities(): Capabilities {
+    return this.chatConfig.getState().capabilities;
+  }
+
+  /** Waits briefly for a config that's still loading, so the first send follows its rules. */
+  private async configSettled(): Promise<void> {
+    const pending = this.configPromise;
+    if (!pending || this.chatConfig.getState().status !== 'loading') return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([pending, new Promise<void>((r) => (timer = setTimeout(r, CONFIG_WAIT_MS)))]);
+    clearTimeout(timer);
+  }
+
+  /** The config's workflows fill the scope picker when the host didn't supply a catalog. */
+  private applyConfigScope(): void {
+    const { config, capabilities } = this.chatConfig.getState();
+    if (this.options.scope || !config || !capabilities.workflowContext || !config.workflows.length) return;
+    const groups = scopeGroupsFromWorkflows(config.workflows);
+    const kept = sanitizeSelection(this.persistedScope, groups);
+    this.scope.setState({
+      groups,
+      selection: kept && Object.keys(kept).length ? kept : selectAll(groups),
+      status: 'ready',
+      origin: 'config',
+    });
+  }
+
+  private warnOnce(key: string, warning: RuntimeWarning): void {
+    if (this.warnedOnce.has(key)) return;
+    this.warnedOnce.add(key);
+    this.warn(warning);
+  }
+
+  /** F16: leaves out source ids the config doesn't list, with one warning per id. */
+  private filterSources(sources: Source[]): Source[] {
+    const { kept, dropped } = knownSources(sources, this.chatConfig.getState().config);
+    for (const id of dropped) {
+      this.warnOnce(`source:${id}`, {
+        code: 'unknown_source',
+        message: `Left out source "${id}": the backend's config doesn't list it.`,
+      });
+    }
+    return kept;
   }
 
   dispose(): void {
@@ -532,7 +702,11 @@ class Runtime implements ChatRuntime {
       this.setActive(id);
       return id;
     }
-    if (this.creating) return this.creating;
+    if (this.creating) {
+      // A chat is already being created: show it, as the first click did. It opens when it arrives.
+      this.setActive(null);
+      return this.creating;
+    }
     const draft = this.thread(null);
     this.setActive(null);
     draft.store.setState((s) => ({ ...s, loadStatus: 'loading', loadError: undefined }));
@@ -756,7 +930,9 @@ class Runtime implements ChatRuntime {
     this.writePrefs();
     if (!id) return;
     try {
-      await this.adapter.updateConversation(id, { model });
+      const updated = await this.adapter.updateConversation(id, { model });
+      const selected = updated ? selectedModelOf(updated) : undefined;
+      if (selected && selected !== model) t.store.setState((s) => ({ ...s, meta: { ...s.meta, model: selected } }));
     } catch (error) {
       t.store.setState((s) => ({ ...s, meta: { ...s.meta, model: prev } }));
       this.reportError(toErrorInfo(error), error);
@@ -765,13 +941,23 @@ class Runtime implements ChatRuntime {
   }
 
   async setDefaultSources(sources: Source[], conversationId?: string): Promise<void> {
+    await this.configSettled();
     const t = this.target(conversationId);
     const id = t.store.getState().conversationId;
     const prev = t.store.getState().meta.sources;
-    t.store.setState((s) => ({ ...s, meta: { ...s.meta, sources } }));
+    const send = this.filterSources(sources);
+    // Every id was unknown: a PATCH with an empty list would wipe the conversation's sources.
+    if (sources.length && !send.length) return;
+    // Show the change right away, but never keep a credential: the server's reply replaces it.
+    t.store.setState((s) => ({ ...s, meta: { ...s.meta, sources: stripCredentials(send) } }));
     if (!id) return;
     try {
-      await this.adapter.updateConversation(id, { sources });
+      const updated = await this.adapter.updateConversation(id, { sources: send });
+      if (Array.isArray(updated?.sources)) {
+        const server = stripCredentials(updated.sources);
+        t.store.setState((s) => ({ ...s, meta: { ...s.meta, sources: server } }));
+        this.persistThread(t);
+      }
     } catch (error) {
       t.store.setState((s) => ({ ...s, meta: { ...s.meta, sources: prev } }));
       this.reportError(toErrorInfo(error), error);
@@ -827,6 +1013,8 @@ class Runtime implements ChatRuntime {
   // ------------------------------------------------------------------------------------------
 
   async send(text: string, options: SendOptions = {}): Promise<void> {
+    // The limits and switches below come from the config; a first send right after start waits for it.
+    await this.configSettled();
     const t = this.target(options.conversationId);
     const trimmed = text.trim();
     const composer = t.composer.getState();
@@ -834,10 +1022,28 @@ class Runtime implements ChatRuntime {
       this.warn({ code: 'attachments_uploading', message: 'Wait for attachments to finish uploading.' });
       return;
     }
-    const attachments =
+    let attachments =
       options.attachments ??
       composer.attachments.filter((a) => a.status === 'ready' && a.attachment).map((a) => a.attachment as Attachment);
     if (!trimmed && attachments.length === 0) return;
+
+    const maxChars = this.chatConfig.getState().config?.limits.max_message_chars;
+    if (maxChars && trimmed.length > maxChars) {
+      this.warn({
+        code: 'message_too_long',
+        message: `Messages can be up to ${maxChars.toLocaleString()} characters.`,
+        data: { length: trimmed.length, max: maxChars },
+      });
+      return;
+    }
+    if (attachments.length && !this.capabilities().attachments) {
+      this.warnOnce('attachments', {
+        code: 'feature_disabled',
+        message: 'This chat does not take attachments; sending without them.',
+      });
+      attachments = [];
+      if (!trimmed) return;
+    }
 
     const state = t.store.getState();
     if (isBusy(state)) {
@@ -850,6 +1056,7 @@ class Runtime implements ChatRuntime {
     }
 
     const now = this.now();
+    const clientMessageId = uid('cm_');
     const userMessage: ChatMessage = {
       id: uid('local_'),
       role: 'user',
@@ -866,6 +1073,7 @@ class Runtime implements ChatRuntime {
       createdAt: new Date(now).toISOString(),
       attachments: attachments.length ? attachments : undefined,
       local: true,
+      clientMessageId,
     };
     t.store.setState((s) => ({
       ...s,
@@ -899,22 +1107,47 @@ class Runtime implements ChatRuntime {
     t.fresh = false;
     this.touchConversation(conversationId);
 
+    const model = options.model ?? (this.capabilities().perTurnModel ? this.modelFor(t) : undefined);
     const body: SendMessageBody = {
       stream: true,
+      client_message_id: clientMessageId,
       message: { role: 'user', type: 'default', content: { default: trimmed } },
       ...this.requestExtras(options),
       ...(attachments.length ? { attachments } : {}),
+      ...(model ? { model } : {}),
+      ...(options.ext ? { ext: options.ext } : {}),
     };
-    t.lastRequest = { kind: 'send', body, userMessageId: userMessage.id };
-    t.onFirstEvent = () =>
-      t.store.setState((s) => ({
-        ...s,
-        messages: s.messages.map((m) => (m.id === userMessage.id ? { ...m, local: false } : m)),
-      }));
+    t.lastRequest = { kind: 'send', body, clientMessageId, confirmed: false };
+    t.reconnectTried = false;
+    t.onFirstEvent = () => this.confirmUserMessage(t, clientMessageId);
     await this.stream(t, conversationId, body);
   }
 
-  async resume(checkpointId: string, decision: HitlDecision, options: { conversationId?: string } = {}): Promise<void> {
+  /** The model to send with a turn: the conversation's, else the one the user last picked. */
+  private modelFor(t: InternalThread): string | undefined {
+    const pref = this.preferences.getState().model;
+    return t.store.getState().meta.model ?? (typeof pref === 'string' && pref ? pref : undefined);
+  }
+
+  /** Marks the optimistic user message as saved on the server. */
+  private confirmUserMessage(t: InternalThread, clientMessageId: string): void {
+    t.store.setState((s) => {
+      if (!s.messages.some((m) => m.clientMessageId === clientMessageId && m.local)) return s;
+      return { ...s, messages: s.messages.map((m) => (m.clientMessageId === clientMessageId ? { ...m, local: false } : m)) };
+    });
+  }
+
+  resume(checkpointId: string, decision: HitlDecision, options: { conversationId?: string } = {}): Promise<void> {
+    return this.doResume(checkpointId, decision, options, false);
+  }
+
+  /** `fromRetry`: a Retry of a failed decision, which must not re-arm the one automatic reconnect. */
+  private async doResume(
+    checkpointId: string,
+    decision: HitlDecision,
+    options: { conversationId?: string },
+    fromRetry: boolean,
+  ): Promise<void> {
     const t = this.findCheckpointThread(checkpointId, options.conversationId);
     if (!t) {
       this.warn({ code: 'unknown_checkpoint', message: `No card is waiting on checkpoint ${checkpointId}.` });
@@ -952,6 +1185,7 @@ class Runtime implements ChatRuntime {
       message: { role: 'user', type: 'hitl', content: { checkpoint_id: checkpointId, decision } },
     };
     t.lastRequest = { kind: 'resume', body, checkpointId };
+    if (!fromRetry) t.reconnectTried = false;
     t.onFirstEvent = () => setCheckpoint({ status: 'resolved' });
     await this.stream(t, conversationId, body);
 
@@ -984,6 +1218,11 @@ class Runtime implements ChatRuntime {
     if (!isBusy(s) || !t.abort || t.cancelRequested) return;
     t.cancelRequested = true;
     t.store.setState((st) => ({ ...st, run: { ...st.run, status: 'cancelling' } }));
+    if (this.capabilities().cancel === 'disconnect') {
+      // The backend stops a run when the client disconnects, and saves the partial reply.
+      t.abort.abort();
+      return;
+    }
     if (s.run.messageId) {
       await this.fireCancel(t);
     } else {
@@ -996,15 +1235,19 @@ class Runtime implements ChatRuntime {
     clearTimeout(t.cancelTimer);
     const { conversationId, run } = t.store.getState();
     const controller = t.abort;
+    let stopped = false;
     if (conversationId && run.messageId) {
       try {
-        await this.adapter.cancelMessage(conversationId, run.messageId);
+        stopped = (await this.adapter.cancelMessage(conversationId, run.messageId))?.status === true;
       } catch (error) {
         this.warn({ code: 'cancel_failed', message: 'The server did not confirm the cancel; stopping locally.', data: error });
       }
     }
-    // Give the server a moment to close with message_stop(cancelled), then stop reading.
-    if (controller && !controller.signal.aborted) t.cancelTimer = setTimeout(() => controller.abort(), 1_500);
+    if (!controller || controller.signal.aborted) return;
+    // `true`: the server is stopping the run and will close with message_stop(cancelled), so give
+    // it a moment. `false`: nothing will stop it server-side, so stop reading now.
+    if (stopped) t.cancelTimer = setTimeout(() => controller.abort(), 1_500);
+    else controller.abort();
   }
 
   canRetry(conversationId?: string | null): boolean {
@@ -1026,21 +1269,64 @@ class Runtime implements ChatRuntime {
     if (req.kind === 'resume') {
       const cp = state.messages.flatMap((m) => m.blocks).find((b) => b.checkpoint?.id === req.checkpointId)?.checkpoint;
       if (cp && cp.status === 'failed') {
-        await this.resume(req.checkpointId, (req.body.message.content as { decision: HitlDecision }).decision, {
-          conversationId: id,
-        });
+        await this.doResume(
+          req.checkpointId,
+          (req.body.message.content as { decision: HitlDecision }).decision,
+          { conversationId: id },
+          true,
+        );
         return;
       }
     }
     // Drop the failed assistant reply; a new one replaces it.
     t.store.setState((s) => {
-      const idx = req.kind === 'send' ? s.messages.findIndex((m) => m.id === req.userMessageId) : -1;
+      const idx = req.kind === 'send' ? s.messages.findIndex((m) => m.clientMessageId === req.clientMessageId) : -1;
       const messages = s.messages.filter(
         (m, i) => !(m.role === 'assistant' && (m.status === 'error' || m.status === 'interrupted') && i > idx),
       );
       return { ...s, messages, run: { status: 'submitting' } };
     });
-    await this.stream(t, id, req.body);
+    let body = req.body;
+    if (req.kind === 'send') {
+      // Unconfirmed: the server may never have seen it, so the same id lets it drop a duplicate.
+      // Confirmed: the server saved that message, so this is a new attempt with a new id.
+      if (req.confirmed) {
+        const clientMessageId = uid('cm_');
+        body = { ...req.body, client_message_id: clientMessageId };
+        t.lastRequest = { ...req, body, clientMessageId, confirmed: false };
+        t.store.setState((s) => ({
+          ...s,
+          messages: s.messages.map((m) => (m.clientMessageId === req.clientMessageId ? { ...m, clientMessageId } : m)),
+        }));
+      }
+      const current = t.lastRequest as Extract<InternalThread['lastRequest'], { kind: 'send' }>;
+      t.onFirstEvent = () => this.confirmUserMessage(t, current.clientMessageId);
+    }
+    await this.stream(t, id, body);
+  }
+
+  async reconnect(conversationId?: string | null): Promise<boolean> {
+    const t = this.target(conversationId);
+    const s = t.store.getState();
+    const last = s.messages[s.messages.length - 1];
+    const error = s.run.error ?? (last?.role === 'assistant' ? last.error : undefined);
+    const hook = this.options.onConnectionRequired;
+    if (!hook || !error || error.action !== 'reconnect' || isBusy(s)) return false;
+    let ok: boolean;
+    try {
+      ok = await hook({
+        sourceId: error.sourceId ?? null,
+        code: error.type,
+        message: error.message,
+        conversationId: s.conversationId,
+      });
+    } catch (e) {
+      this.reportError(toErrorInfo(e), e);
+      return false;
+    }
+    if (!ok || this.disposed || !this.canRetry(s.conversationId)) return false;
+    await this.retry(s.conversationId);
+    return true;
   }
 
   private requestExtras(
@@ -1052,12 +1338,33 @@ class Runtime implements ChatRuntime {
       cfg && sc.status === 'ready' ? (cfg.toRequest ?? defaultScopeToRequest)(sc.selection, sc.groups) : {};
     const host =
       typeof this.options.workflowContext === 'function' ? this.options.workflowContext() : this.options.workflowContext;
-    const workflow_context = mergeWorkflowContexts(scoped.workflow_context, host, options.workflowContext);
-    const sources = options.sources ?? scoped.sources;
-    return { ...(workflow_context ? { workflow_context } : {}), ...(sources ? { sources } : {}) };
+    const caps = this.capabilities();
+    let workflow_context = mergeWorkflowContexts(scoped.workflow_context, host, options.workflowContext);
+    if (workflow_context && !caps.workflowContext) {
+      // Sending it would fail with `unsupported_feature`.
+      this.warnOnce('workflow_context', {
+        code: 'feature_disabled',
+        message: 'This chat does not take workflow context; sending without it.',
+      });
+      workflow_context = undefined;
+    }
+    let sources = options.sources ?? scoped.sources;
+    if (sources && !caps.perTurnSources) {
+      this.warnOnce('per_turn_sources', {
+        code: 'feature_disabled',
+        message: 'This chat sets sources per conversation only; use setDefaultSources.',
+      });
+      sources = undefined;
+    }
+    if (sources) sources = this.filterSources(sources);
+    return { ...(workflow_context ? { workflow_context } : {}), ...(sources?.length ? { sources } : {}) };
   }
 
   private apply(t: InternalThread, event: StreamEvent): void {
+    if (event.type === 'checkpoint' && !this.capabilities().hitl) {
+      this.warnOnce('hitl', { code: 'feature_disabled', message: 'Ignored a checkpoint: this chat has approvals turned off.' });
+      return;
+    }
     t.store.setState(
       (s) => {
         let next = reduceStreamEvent(s, event, { now: this.now(), resolveDeltaHandler: this.deltaResolver });
@@ -1077,6 +1384,7 @@ class Runtime implements ChatRuntime {
 
     let sawStop = false;
     let sawAny = false;
+    let duplicate = false;
     let idle: ReturnType<typeof setTimeout> | undefined;
     const armIdle = () => {
       clearTimeout(idle);
@@ -1095,14 +1403,15 @@ class Runtime implements ChatRuntime {
       for await (const event of events) {
         if (controller.signal.aborted && t.abortReason) break;
         armIdle();
+        this.emitter.emit('event', event, { conversationId });
+        this.options.onEvent?.(event, { conversationId });
+        this.apply(t, event);
         if (!sawAny) {
           sawAny = true;
           t.onFirstEvent?.();
           t.onFirstEvent = undefined;
         }
-        this.emitter.emit('event', event, { conversationId });
-        this.options.onEvent?.(event, { conversationId });
-        this.apply(t, event);
+        if (event.type === 'message_start' && t.lastRequest?.kind === 'send') t.lastRequest.confirmed = true;
         if (event.type === 'message_start' && t.cancelRequested) void this.fireCancel(t);
         if (event.type === 'message_stop') {
           sawStop = true;
@@ -1120,6 +1429,15 @@ class Runtime implements ChatRuntime {
         // Nothing to show: the thread is going away.
       } else if (t.cancelRequested && (isAbortError(error) || controller.signal.aborted)) {
         this.finishInterrupted(t, undefined);
+      } else if (!sawAny && error instanceof ChatApiError && error.errorType === 'duplicate_message') {
+        // The server already has this message (an earlier attempt got through): show what it has.
+        duplicate = true;
+        if (t.lastRequest?.kind === 'send') {
+          t.lastRequest.confirmed = true;
+          this.confirmUserMessage(t, t.lastRequest.clientMessageId);
+        }
+        t.store.setState((s) => ({ ...s, run: { status: 'idle' } }));
+        this.warn({ code: 'duplicate_message', message: 'That message was already sent; reloading the conversation.' });
       } else {
         const info: ChatErrorInfo =
           t.abortReason === 'timeout'
@@ -1145,6 +1463,20 @@ class Runtime implements ChatRuntime {
         this.persistThread(t);
       }
     }
+    if (this.disposed) return;
+    if (duplicate) {
+      await this.loadThread(t, true);
+      return;
+    }
+    await this.reconnectOnce(t);
+  }
+
+  /** F15: after a connection error, asks the host to reconnect and retries the turn once. */
+  private async reconnectOnce(t: InternalThread): Promise<void> {
+    const s = t.store.getState();
+    if (t.reconnectTried || !this.options.onConnectionRequired || s.run.error?.action !== 'reconnect') return;
+    t.reconnectTried = true;
+    await this.reconnect(s.conversationId);
   }
 
   private endedEarly(t: InternalThread): ChatErrorInfo | undefined {
@@ -1176,18 +1508,26 @@ class Runtime implements ChatRuntime {
       result.rejected = list.map((file) => ({ file, reason: 'Attachments are not enabled.' }));
       return result;
     }
-    const maxFiles = cfg.maxFiles ?? 10;
+    if (!this.capabilities().attachments) {
+      result.rejected = list.map((file) => ({ file, reason: 'This chat does not take attachments.' }));
+      return result;
+    }
+    // The backend's limits apply on top of the host's.
+    const limits = this.chatConfig.getState().config?.limits;
+    const maxFiles = Math.min(cfg.maxFiles ?? 10, limits?.max_attachments || Infinity);
+    const maxSize = Math.min(cfg.maxSize || Infinity, limits?.max_attachment_bytes || Infinity);
+    const serverTypes = limits?.attachment_types?.length ? limits.attachment_types.join(',') : undefined;
     let room = maxFiles - t.composer.getState().attachments.length;
     for (const file of list) {
       if (room <= 0) {
         result.rejected.push({ file, reason: `You can attach up to ${maxFiles} files.` });
         continue;
       }
-      if (cfg.maxSize && file.size > cfg.maxSize) {
-        result.rejected.push({ file, reason: `${file.name} is larger than ${formatBytes(cfg.maxSize)}.` });
+      if (Number.isFinite(maxSize) && file.size > maxSize) {
+        result.rejected.push({ file, reason: `${file.name} is larger than ${formatBytes(maxSize)}.` });
         continue;
       }
-      if (cfg.accept && !matchesAccept(file, cfg.accept)) {
+      if ((cfg.accept && !matchesAccept(file, cfg.accept)) || (serverTypes && !matchesAccept(file, serverTypes))) {
         result.rejected.push({ file, reason: `${file.name} isn't a supported file type.` });
         continue;
       }
@@ -1247,7 +1587,7 @@ class Runtime implements ChatRuntime {
     const apply = (groups: ScopeGroup[]) => {
       const safe = Array.isArray(groups) ? groups : [];
       const persisted = sanitizeSelection(this.persistedScope, safe);
-      this.scope.setState({ groups: safe, selection: persisted ?? initialSelection(cfg, safe), status: 'ready' });
+      this.scope.setState({ groups: safe, selection: persisted ?? initialSelection(cfg, safe), status: 'ready', origin: 'host' });
     };
     const fail = (error: unknown) => {
       this.scope.setState((s) => ({ ...s, status: 'error' }));
@@ -1268,7 +1608,7 @@ class Runtime implements ChatRuntime {
     let selection = kept && Object.keys(kept).length ? kept : initialSelection(this.options.scope, groups);
     // A default that no longer matches the new catalog means "everything", not "nothing".
     if (!Object.keys(selection).length && this.options.scope?.defaultSelection !== 'none') selection = selectAll(groups);
-    this.scope.setState({ groups, selection, status: 'ready' });
+    this.scope.setState({ groups, selection, status: 'ready', origin: 'host' });
   }
 
   setScopeSelection(selection: ScopeSelection): void {
@@ -1361,7 +1701,11 @@ class Runtime implements ChatRuntime {
       t.store.setState({
         ...s,
         loadStatus: 'ready',
-        meta: { ...s.meta, ...cached.meta },
+        meta: {
+          ...s.meta,
+          ...cached.meta,
+          sources: stripCredentials(Array.isArray(cached.meta?.sources) ? cached.meta.sources : s.meta.sources),
+        },
         messages: cached.messages,
         pendingCheckpoint: cached.pendingCheckpoint,
         run: cached.pendingCheckpoint ? { status: 'paused', messageId: cached.pendingCheckpoint.messageId } : { status: 'idle' },
@@ -1381,7 +1725,11 @@ class Runtime implements ChatRuntime {
     const s = t.store.getState();
     const id = s.conversationId;
     if (!id) return;
-    const data: PersistedThread = { meta: s.meta, messages: completedOnly(s.messages), pendingCheckpoint: s.pendingCheckpoint };
+    const data: PersistedThread = {
+      meta: { ...s.meta, sources: stripCredentials(s.meta.sources) },
+      messages: completedOnly(s.messages),
+      pendingCheckpoint: s.pendingCheckpoint,
+    };
     this.persister.write(`thread:${id}`, data);
     const index = this.threadIndex.filter((e) => e.id !== id);
     index.push({ id, savedAt: this.now() });

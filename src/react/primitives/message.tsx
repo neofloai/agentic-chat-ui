@@ -40,6 +40,7 @@ export function MessageIf({ role, status, last, children }: MessageIfProps) {
 /** Plain text of a message, for copy buttons. Uses each block's `toText` when it has one. */
 export function messageText(message: ChatMessage, toText?: (block: ChatMessage['blocks'][number]) => string | undefined): string {
   return message.blocks
+    .filter((b) => !b.pairedWith)
     .map((b) => {
       const custom = toText?.(b);
       if (custom !== undefined) return custom;

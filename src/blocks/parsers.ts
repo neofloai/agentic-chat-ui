@@ -9,7 +9,8 @@ import type { ValueFormat } from './format';
 export const BLOCK_TYPES = {
   text: ['text', 'markdown'],
   thinking: ['thinking', 'reasoning'],
-  toolCall: ['tool_call', 'tool_use', 'tool'],
+  /** `tool_result` renders inside its tool call's card; one with no matching call gets its own. */
+  toolCall: ['tool_call', 'tool_use', 'tool', 'tool_result'],
   table: ['table', 'data_table'],
   sources: ['sources', 'citations'],
   approval: ['approval', 'hitl_approval', 'confirmation'],
@@ -54,7 +55,14 @@ export const parseThinking = (b: ContentBlock, cb?: ChatBlock): ThinkingData => 
 
 // --- tool call --------------------------------------------------------------------------------
 
-export type ToolStatus = 'running' | 'success' | 'error';
+/** `interrupted`: the reply ended before the tool's `tool_result` arrived. */
+export type ToolStatus = 'running' | 'success' | 'error' | 'interrupted';
+
+export interface ToolResultItem {
+  title: string;
+  snippet?: string;
+  url?: string;
+}
 
 export interface ToolCallData {
   name: string;
@@ -64,6 +72,10 @@ export interface ToolCallData {
   output?: unknown;
   /** One-line result ("4 rows"), shown as the `returned` row. */
   summary?: string;
+  /** From a `tool_result`: what the tool found. */
+  results?: ToolResultItem[];
+  /** From a `tool_result`: how many results there were in total. */
+  resultCount?: number;
   durationMs?: number;
   error?: string;
 }
@@ -77,27 +89,89 @@ function parsePartialJson(v: unknown): Json {
   }
 }
 
-export const parseToolCall = (b: ContentBlock, cb?: ChatBlock): ToolCallData => {
-  const input = obj(first(b.input, b.arguments, b.args, b.parameters));
-  const inputEntries = Object.entries(Object.keys(input).length ? input : parsePartialJson(b.partial_json));
+function inlineStatus(b: ContentBlock, cb?: ChatBlock): ToolStatus {
   const rawStatus = str(b.status).toLowerCase();
-  const status: ToolStatus =
-    rawStatus === 'error' || rawStatus === 'failed' || b.is_error === true || optStr(b.error)
-      ? 'error'
-      : rawStatus === 'running' || rawStatus === 'in_progress' || (cb?.status === 'streaming' && rawStatus !== 'success')
-        ? 'running'
-        : 'success';
+  if (rawStatus === 'error' || rawStatus === 'failed' || b.is_error === true || optStr(b.error)) return 'error';
+  if (rawStatus === 'running' || rawStatus === 'in_progress' || (cb?.status === 'streaming' && rawStatus !== 'success')) {
+    return 'running';
+  }
+  return 'success';
+}
+
+function resultItems(v: unknown): ToolResultItem[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  return v.flatMap((raw) => {
+    const o = typeof raw === 'string' ? { title: raw } : obj(raw);
+    const title = optStr(first(o.title, o.label, o.name));
+    const snippet = optStr(first(o.snippet, o.description, o.text));
+    if (!title && !snippet) return [];
+    return [
+      { title: title ?? snippet!, ...(title && snippet ? { snippet } : {}), ...(optStr(o.url) ? { url: optStr(o.url) } : {}) },
+    ];
+  });
+}
+
+/**
+ * A tool call and its result as one card. The result is the paired `tool_result` block
+ * (`tool_use_id` → the call's id), or the call's own `output` for backends that put it inline.
+ * Debug fields such as `http_trace` are never shown.
+ */
+export const parseToolCall = (b: ContentBlock, cb?: ChatBlock): ToolCallData => {
+  const ownResult = b.type === 'tool_result';
+  const paired = cb?.toolResult;
+  const r = paired?.data ?? (ownResult ? b : undefined);
+  const input = ownResult ? {} : obj(first(b.input, b.arguments, b.args, b.parameters));
+  const inputEntries = Object.entries(Object.keys(input).length ? input : parsePartialJson(b.partial_json));
+
+  let status: ToolStatus;
+  if (r) {
+    const failed = r.is_error === true || ['error', 'failed'].includes(str(r.status).toLowerCase());
+    status = paired?.status === 'streaming' ? 'running' : failed ? 'error' : 'success';
+  } else if (cb?.toolResultMissing) {
+    status = 'interrupted';
+  } else if (b.type === 'tool_use' && b.status === undefined && b.output === undefined && b.result === undefined) {
+    // A `tool_use` is answered by a separate `tool_result`; until it arrives the tool is running.
+    status = b.is_error === true ? 'error' : 'running';
+  } else {
+    status = inlineStatus(b, cb);
+  }
+
+  const results = r ? resultItems(r.results) : undefined;
+  const errorText =
+    status === 'error'
+      ? (optStr(first(r?.error, r?.message, b.error)) ?? optStr(first(r?.error_code, b.error_code)))
+      : optStr(b.error);
+  // How long the tool ran: from the call starting to its result completing.
+  const durationMs =
+    num(first(r?.duration_ms, b.duration_ms)) ??
+    (paired?.completedAt && cb?.startedAt && paired.completedAt >= cb.startedAt
+      ? paired.completedAt - cb.startedAt
+      : r
+        ? undefined
+        : elapsed(cb));
+
   return {
-    name: str(first(b.name, b.tool_name, b.tool), 'tool'),
+    name: str(first(b.name, b.tool_name, b.tool, r?.tool, r?.tool_name), 'tool'),
     title: optStr(b.title),
     status,
     input: inputEntries,
-    output: first(b.output, b.result),
-    summary: optStr(first(b.result_summary, b.summary)),
-    durationMs: num(b.duration_ms) ?? elapsed(cb),
-    error: optStr(b.error),
+    output: r ? (results ? undefined : first(r.output, r.content, r.result)) : first(b.output, b.result),
+    summary: optStr(first(r?.result_summary, r?.summary, b.result_summary, b.summary)),
+    ...(results ? { results } : {}),
+    ...(r && num(r.result_count) !== undefined ? { resultCount: num(r.result_count) } : {}),
+    durationMs,
+    error: errorText,
   };
 };
+
+// --- fallback (`<product>.<name>` blocks another product renders) -----------------------------
+
+export interface FallbackData {
+  /** Markdown the product sends for clients that don't have its renderer. */
+  text?: string;
+}
+
+export const parseFallback = (b: ContentBlock): FallbackData => ({ text: optStr(b.fallback_text) });
 
 // --- table ------------------------------------------------------------------------------------
 

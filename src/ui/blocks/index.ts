@@ -6,6 +6,7 @@ import {
   parseArtifact,
   parseChoice,
   parseError,
+  parseFallback,
   parseImage,
   parsePlan,
   parseSources,
@@ -135,8 +136,13 @@ export const planBlock = defineBlock<PlanData>({
   toText: () => '',
 });
 
-/** Renders blocks nobody claimed: JSON in development, nothing in production. */
-export const unknownBlock = defineBlock({ name: 'unknown', match: () => false, render: UnknownBlock });
+/** Renders blocks nobody claimed: `fallback_text` when the block has it, else JSON in development only. */
+export const unknownBlock = defineBlock({
+  name: 'unknown',
+  match: () => false,
+  render: UnknownBlock,
+  toText: (_d, block) => parseFallback(block.data).text ?? '',
+});
 
 /** Every built-in block except charts (import `chartBlock` from `@neofloai/agentic-chat/charts`). */
 export const defaultBlocks: readonly BlockDefinition[] = [

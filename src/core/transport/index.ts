@@ -5,6 +5,16 @@ export {
   type RestAdapterOptions,
   type RestPaths,
   type RetryOptions,
+  type UnauthorizedInfo,
 } from './rest-adapter';
 export { SseParser, readSse, type SseMessage } from './sse';
-export { ChatError, ChatApiError, ChatStreamError, ChatProtocolError, ChatTimeoutError, isAbortError } from './errors';
+export {
+  ChatError,
+  ChatApiError,
+  ChatStreamError,
+  ChatProtocolError,
+  ChatTimeoutError,
+  isAbortError,
+  readErrorEnvelope,
+  type ErrorEnvelopeFields,
+} from './errors';

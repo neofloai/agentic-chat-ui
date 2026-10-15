@@ -1,9 +1,17 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { HitlDecision } from '../../core/protocol/types';
+import type { HitlDecision, Source } from '../../core/protocol/types';
 import type { ChatRuntime, RuntimeEvents, SendOptions, ThreadHandle } from '../../core/runtime/runtime';
 import { summarizeScope } from '../../core/runtime/scope';
 import { filterConversations, groupConversations } from '../../core/store/conversations';
-import type { ChatBlock, ChatMessage, RunState, ThreadMeta, ThreadState } from '../../core/store/types';
+import type {
+  Capabilities,
+  ChatBlock,
+  ChatConfigState,
+  ChatMessage,
+  RunState,
+  ThreadMeta,
+  ThreadState,
+} from '../../core/store/types';
 import type { BlockActions, ChatAction } from '../../registry/types';
 import { BlockContext, MessageContext, ThreadContext, useChatContext } from '../context';
 import type { ChatLabels } from '../labels';
@@ -19,6 +27,26 @@ export function useChatRuntime(): ChatRuntime {
 
 export function useLabels(): ChatLabels {
   return useChatContext().labels;
+}
+
+/** The backend's config (endpoint 0): `status`, the normalized `config`, and the `capabilities` in effect. */
+export function useChatConfig(): ChatConfigState {
+  const runtime = useChatRuntime();
+  return useStoreSelector(runtime.chatConfig, (s) => s);
+}
+
+/** What the UI may use, after combining the backend's config with the host's switches. */
+export function useCapabilities(): Capabilities {
+  const runtime = useChatRuntime();
+  return useStoreSelector(runtime.chatConfig, (s) => s.capabilities);
+}
+
+/** A source's display name from the config, falling back to its id. */
+export function useSourceLabel(sourceId: string | null | undefined): string | undefined {
+  const runtime = useChatRuntime();
+  return useStoreSelector(runtime.chatConfig, (s) =>
+    sourceId ? (s.config?.sources.find((x) => x.id === sourceId)?.label ?? sourceId) : undefined,
+  );
 }
 
 export function useActiveConversationId(): string | null {
@@ -72,12 +100,14 @@ export function useChatActions() {
       cancel: () => runtime.cancel(cid()),
       retry: () => runtime.retry(cid()),
       canRetry: () => runtime.canRetry(cid()),
+      reconnect: () => runtime.reconnect(cid()),
       newConversation: () => runtime.newConversation(),
       selectConversation: (id: string | null) => runtime.selectConversation(id),
       renameConversation: (id: string, title: string) => runtime.renameConversation(id, title),
       archiveConversation: (id: string, archived: boolean) => runtime.archiveConversation(id, archived),
       deleteConversation: (id: string) => runtime.deleteConversation(id),
       setModel: (model: string) => runtime.setModel(model, cid() ?? undefined),
+      setDefaultSources: (sources: Source[]) => runtime.setDefaultSources(sources, cid() ?? undefined),
       emit: (name: string, payload?: unknown, extra?: Partial<ChatAction>) =>
         onAction?.({ name, payload, conversationId: cid(), ...extra }),
     };
@@ -91,12 +121,17 @@ export function useComposer() {
   const status = useStoreSelector(handle.store, (s) => s.run.status);
   const paused = useStoreSelector(handle.store, (s) => Boolean(s.pendingCheckpoint));
   const loadStatus = useStoreSelector(handle.store, (s) => s.loadStatus);
+  const attachmentsAllowed = useStoreSelector(runtime.chatConfig, (s) => s.capabilities.attachments);
+  const limits = useStoreSelector(runtime.chatConfig, (s) => s.config?.limits);
 
   const busy = BUSY.has(status);
   const uploading = composer.attachments.some((a) => a.status === 'uploading');
   const blockedByDecision = paused && runtime.config.composerWhilePaused === 'disabled';
   const hasContent = composer.text.trim().length > 0 || composer.attachments.some((a) => a.status === 'ready');
-  const canSend = !busy && !uploading && !blockedByDecision && hasContent && loadStatus !== 'loading';
+  const maxChars = limits?.max_message_chars || undefined;
+  const tooLong = maxChars !== undefined && composer.text.trim().length > maxChars;
+  const canSend = !busy && !uploading && !blockedByDecision && hasContent && !tooLong && loadStatus !== 'loading';
+  const serverTypes = limits?.attachment_types?.length ? limits.attachment_types.join(',') : undefined;
 
   const cid = useCallback(() => handle.store.getState().conversationId, [handle]);
   return {
@@ -107,8 +142,12 @@ export function useComposer() {
     uploading,
     blockedByDecision,
     canSend,
-    attachmentsEnabled: Boolean(runtime.config.attachments),
-    accept: runtime.config.attachments?.accept,
+    /** The backend's `max_message_chars`, when it sets one. */
+    maxChars,
+    /** The draft is longer than `maxChars`; sending is blocked. */
+    tooLong,
+    attachmentsEnabled: Boolean(runtime.config.attachments) && attachmentsAllowed,
+    accept: runtime.config.attachments?.accept ?? serverTypes,
     setText: (text: string) => runtime.setDraft(text, cid()),
     send: () => (canSend ? runtime.send(handle.composer.getState().text, { conversationId: cid() }) : Promise.resolve()),
     cancel: () => runtime.cancel(cid()),
@@ -129,7 +168,9 @@ export function useConversations() {
   const state = useStoreSelector(runtime.conversations, (s) => s);
   const activeId = useStoreSelector(runtime.session, (s) => s.activeId);
   const [query, setQuery] = useState('');
-  const [showArchived, setShowArchived] = usePreference('history.showArchived', false);
+  const canArchive = useStoreSelector(runtime.chatConfig, (s) => s.capabilities.archive);
+  const [archivedPref, setShowArchived] = usePreference('history.showArchived', false);
+  const showArchived = canArchive && archivedPref;
 
   const items = useMemo(
     () =>
@@ -154,6 +195,8 @@ export function useConversations() {
     setQuery,
     showArchived,
     setShowArchived,
+    /** The backend supports archiving (the `archive` capability). */
+    canArchive,
     create: () => runtime.newConversation(),
     select: (id: string) => runtime.selectConversation(id),
     rename: (id: string, title: string) => runtime.renameConversation(id, title),
@@ -168,11 +211,13 @@ export type GroupSelectionState = 'all' | 'some' | 'none';
 export function useScope() {
   const runtime = useChatRuntime();
   const scope = useStoreSelector(runtime.scope, (s) => s);
+  const allowed = useStoreSelector(runtime.chatConfig, (s) => s.capabilities.workflowContext);
   const summary = useMemo(() => summarizeScope(scope.selection, scope.groups), [scope.selection, scope.groups]);
 
   const current = () => runtime.scope.getState();
   return {
-    enabled: runtime.config.hasScope,
+    /** A catalog exists (the host's `scope`, or the config's workflows) and the backend takes workflow context. */
+    enabled: (runtime.config.hasScope || scope.origin === 'config') && allowed,
     status: scope.status,
     groups: scope.groups,
     selection: scope.selection,

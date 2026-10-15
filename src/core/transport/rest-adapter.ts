@@ -1,6 +1,7 @@
 import { parseStreamEvent, isContentBlock } from '../protocol/events';
 import type {
   CancelResult,
+  ChatConfig,
   ContentBlock,
   ConversationBootstrap,
   ConversationDetail,
@@ -12,10 +13,11 @@ import type {
   UpdatedConversation,
 } from '../protocol/types';
 import type { ChatAdapter, SendMessageOptions } from './adapter';
-import { ChatApiError, ChatError, ChatProtocolError, isAbortError, messageFromBody } from './errors';
+import { ChatApiError, ChatError, ChatProtocolError, isAbortError, messageFromBody, readErrorEnvelope } from './errors';
 import { readSse } from './sse';
 
 export interface RestPaths {
+  config: string;
   createConversation: string;
   listConversations: string;
   conversation: (conversationId: string) => string;
@@ -24,6 +26,7 @@ export interface RestPaths {
 }
 
 export const DEFAULT_REST_PATHS: RestPaths = {
+  config: '/v1/chat/config',
   createConversation: '/v1/conversation',
   listConversations: '/v1/conversations',
   conversation: (id) => `/v1/conversations/${encodeURIComponent(id)}`,
@@ -40,6 +43,19 @@ export interface RetryOptions {
   maxDelayMs?: number;
 }
 
+/** What `onUnauthorized` gets: the 401's error code tells the host where to send the user. */
+export interface UnauthorizedInfo {
+  /**
+   * The envelope's `error.type`: `unauthenticated` (sign in again), or a product code such as
+   * `askneo.gate_required` or `askneo.workspace_required`. `null` when the body had none.
+   */
+  code: string | null;
+  /** The server's message, when it sent one. */
+  message: string | null;
+  requestId: string | null;
+  body: unknown;
+}
+
 export interface RestAdapterOptions {
   /** e.g. `https://api.example.com` — the `/v1/...` paths are appended. */
   baseUrl: string;
@@ -53,12 +69,14 @@ export interface RestAdapterOptions {
   /** Override individual endpoint paths. */
   paths?: Partial<RestPaths>;
   /**
-   * Called once when a request gets a 401. Refresh the token and return `true` to retry
-   * that request one time; return `false` to let the 401 surface as an error.
+   * Called once when a request gets a 401, with the error code. Sign the user in again (or
+   * send them to the gate or workspace picker the code names) and return `true` to retry that
+   * request one time; return `false` to let the 401 surface as an error.
    */
-  onUnauthorized?: () => boolean | Promise<boolean>;
+  onUnauthorized?: (info: UnauthorizedInfo) => boolean | Promise<boolean>;
   /** Retry policy for idempotent calls. Message POSTs are never retried. `false` disables it. */
   retry?: RetryOptions | false;
+  /** `'include'` sends the session cookie when the API is on another origin. */
   credentials?: RequestCredentials;
   /** Timeout for REST calls (not the message stream). @default 30000 */
   timeoutMs?: number;
@@ -157,7 +175,7 @@ function* synthesizeEvents(json: unknown, conversationId: string): Generator<Str
   };
 }
 
-/** A `ChatAdapter` for any backend that implements the chat-layer schema v1. */
+/** A `ChatAdapter` for any backend on the Neoflo chat standard (endpoints 0–7). */
 export function createRestAdapter(options: RestAdapterOptions): ChatAdapter {
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
   const paths: RestPaths = { ...DEFAULT_REST_PATHS, ...options.paths };
@@ -215,11 +233,28 @@ export function createRestAdapter(options: RestAdapterOptions): ChatAdapter {
       // The stream keeps reading after this returns, so only REST calls clear their timer here.
       if (init.timeout !== false) linked.cleanup();
 
+      const requestId = res.headers.get('x-request-id');
+
       if (res.status === 401 && options.onUnauthorized && !refreshed) {
         refreshed = true;
-        await res.body?.cancel().catch(() => undefined);
-        if (await options.onUnauthorized()) continue;
-        throw new ChatApiError(401, 'Your session has expired. Sign in again to keep chatting.', undefined);
+        const body = await readBody(res);
+        const envelope = readErrorEnvelope(body);
+        const info: UnauthorizedInfo = {
+          code: envelope.type,
+          message: envelope.message,
+          requestId: envelope.requestId ?? requestId,
+          body,
+        };
+        if (await options.onUnauthorized(info)) continue;
+        throw new ChatApiError(
+          401,
+          messageFromBody(body, 'Your session has expired. Sign in again to keep chatting.'),
+          body,
+          null,
+          {
+            requestId,
+          },
+        );
       }
 
       if (!res.ok) {
@@ -232,13 +267,27 @@ export function createRestAdapter(options: RestAdapterOptions): ChatAdapter {
           continue;
         }
         const body = await readBody(res);
-        throw new ChatApiError(res.status, messageFromBody(body, `Request failed (${res.status}).`), body, retryAfter);
+        throw new ChatApiError(res.status, messageFromBody(body, `Request failed (${res.status}).`), body, retryAfter, {
+          requestId,
+        });
       }
       return res;
     }
   }
 
   return {
+    async getConfig() {
+      try {
+        const res = await send('GET', paths.config, { idempotent: true });
+        const json = await readJson<ChatConfig | undefined>(res);
+        return json && typeof json === 'object' ? json : null;
+      } catch (error) {
+        // No config endpoint: the backend predates it. The runtime falls back to the host's switches.
+        if (error instanceof ChatApiError && (error.status === 404 || error.status === 405)) return null;
+        throw error;
+      }
+    },
+
     async createConversation() {
       const res = await send('POST', paths.createConversation, { idempotent: false });
       return readJson<ConversationBootstrap>(res);

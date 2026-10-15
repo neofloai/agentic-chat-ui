@@ -232,21 +232,46 @@ export const DEFAULT_SCENARIOS: MockScenario[] = [
     },
   },
   {
+    name: 'invoice processing',
+    // The mock adapter answers this with 422 `connection_expired` until the source is connected.
+    match: has('reconnect', 'invoice processing'),
+    async run(w) {
+      await w.status('Searching invoice processing');
+      await w.tool(
+        'invoice_processing',
+        { query: 'held invoices', window: '30d' },
+        {
+          result_count: 2,
+          results: [
+            { title: 'INV-1042', snippet: 'Redwood Components · 3,940.24 · held: price vs order', url: null },
+            { title: 'INV-1051', snippet: 'Orchard Retail · 4,101.00 · held: price vs order', url: null },
+          ],
+        },
+        { durationMs: 900 },
+      );
+      await w.text('Invoice processing is connected again. Two invoices are held on a price difference against the order.');
+    },
+  },
+  {
+    name: 'interrupted tool',
+    match: has('interrupt'),
+    async run(w) {
+      await w.status('Asking the ERP');
+      // The reply ends without a tool_result, so the card shows "Interrupted" instead of spinning.
+      await w.tool('erp_lookup', { vendor: 'Cascade Supply' }, null, { durationMs: 400 });
+      await w.text('The ERP lookup did not come back, so I answered from the last sync instead.');
+    },
+  },
+  {
     name: 'error',
     match: has('fail', 'error', 'break'),
     async run(w) {
       await w.status('Posting to NetSuite');
-      await w.block(
-        {
-          type: 'tool_call',
-          category: 'tool',
-          name: 'post_invoices',
-          input: { erp: 'NetSuite' },
-          status: 'error',
-          error: 'Timed out after 30 s',
-          duration_ms: 30000,
-        },
-        { startWith: { status: 'running', error: undefined } },
+      await w.tool(
+        'post_invoices',
+        { erp: 'NetSuite' },
+        { is_error: true, error_code: 'Timed out after 30 s', result_count: 0, results: [] },
+        { durationMs: 600 },
       );
       await w.block({
         type: 'error',
@@ -275,17 +300,14 @@ export const DEFAULT_SCENARIOS: MockScenario[] = [
         'The price difference is against the order, not the receipt, so this is a purchasing question rather than a goods-received one.',
         { durationMs: 4000 },
       );
-      await w.block(
+      await w.tool(
+        'search_invoices',
+        { workspace: 'Finance', status: 'held', window: '30d' },
         {
-          type: 'tool_call',
-          category: 'tool',
-          name: 'search_invoices',
-          input: { workspace: 'Finance', status: 'held', window: '30d' },
-          status: 'success',
-          result_summary: '4 rows',
-          duration_ms: 800,
+          result_count: 4,
+          results: heldInvoices.rows.map((r) => ({ title: r.vendor, snippet: `${r.reason} · ${r.amount.toLocaleString()}` })),
         },
-        { startWith: { status: 'running', result_summary: undefined } },
+        { durationMs: 800 },
       );
       await w.block(heldInvoices);
       await w.text(

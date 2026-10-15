@@ -3,6 +3,7 @@ import { text } from '@neofloai/atoms/tokens';
 import {
   Block,
   ChatComposer,
+  ComposerPicker,
   ChatHistory,
   ChatProvider,
   ChatSuggestions,
@@ -14,6 +15,7 @@ import {
   WelcomeScreen,
   createChatRuntime,
   defaultBlocks,
+  linkToolResults,
   mode,
   unknownBlock,
   useThread,
@@ -250,6 +252,41 @@ const SAMPLES: Sample[] = [
       }),
     ]),
   },
+  {
+    id: 'tool-use-result',
+    title: 'ToolBlock',
+    note: 'tool_use and its tool_result, one card',
+    message: linkToolResults(
+      msg('m-tool-ur', [
+        b('toolu_01', { type: 'tool_use', category: 'tool', tool: 'search_v2', input: { query: 'Acme open invoices Q3' } }),
+        b('tr_01', {
+          type: 'tool_result',
+          category: 'tool',
+          tool_use_id: 'toolu_01',
+          is_error: false,
+          error_code: null,
+          result_count: 2,
+          results: [
+            { title: 'INV-1042', snippet: 'Acme Corp · 12,400 · open', url: null },
+            { title: 'INV-1051', snippet: 'Acme Corp · 9,850 · open', url: null },
+          ],
+          http_trace: null,
+        }),
+      ]),
+      { ended: true },
+    ),
+  },
+  {
+    id: 'tool-interrupted',
+    title: 'ToolBlock',
+    note: 'the reply ended without a tool_result',
+    message: linkToolResults(
+      msg('m-tool-i', [
+        b('toolu_02', { type: 'tool_use', category: 'tool', tool: 'erp_lookup', input: { vendor: 'Cascade Supply' } }),
+      ]),
+      { ended: true },
+    ),
+  },
   { id: 'table', title: 'TableBlock', note: 'result set, sortable', message: msg('m-table', [b('table', heldTable)]) },
   {
     id: 'sources',
@@ -448,6 +485,19 @@ const SAMPLES: Sample[] = [
     note: 'development only',
     message: msg('m-unk', [b('unk', { type: 'invoice_card', category: 'ui', number: 'INV-1042' })]),
   },
+  {
+    id: 'product-block',
+    title: 'Product block',
+    note: 'askneo.invoice_card in an app without its renderer: fallback_text',
+    message: msg('m-prod', [
+      b('prod', {
+        type: 'askneo.invoice_card',
+        category: 'ui',
+        fallback_text: '**INV-1042** · Redwood Components · 3,940.24 · held on a price difference',
+        data: { number: 'INV-1042', amount: 3940.24 },
+      }),
+    ]),
+  },
 ];
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -459,6 +509,49 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       <Divider sx={{ mb: 3 }} />
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' }, gap: 4 }}>{children}</Box>
     </Box>
+  );
+}
+
+/** Your own controls in the composer's slots: a tools picker on the left, a model picker on the right. */
+function ComposerWithControls() {
+  const [tools, setTools] = useState(['web', 'docs']);
+  const [model, setModel] = useState(['balanced']);
+  return (
+    <ChatComposer
+      scopePicker={false}
+      leadingActions={
+        <ComposerPicker
+          name="Tools"
+          groups={[
+            {
+              id: 'tools',
+              label: 'Tools',
+              selectAll: true,
+              items: [
+                { id: 'web', label: 'Web search' },
+                { id: 'docs', label: 'Documents', description: 'Files uploaded to this workspace' },
+                { id: 'erp', label: 'ERP' },
+              ],
+            },
+          ]}
+          value={tools}
+          onChange={setTools}
+        />
+      }
+      extraActions={
+        <ComposerPicker
+          name="Model"
+          multiple={false}
+          items={[
+            { id: 'fast', label: 'Fast' },
+            { id: 'balanced', label: 'Balanced' },
+            { id: 'deep', label: 'Deep' },
+          ]}
+          value={model}
+          onChange={setModel}
+        />
+      }
+    />
   );
 }
 
@@ -583,6 +676,11 @@ export function GalleryPage() {
             <Spec title="Composer" note="typed, two attachments">
               <ThreadProvider conversationId="gallery-composer-files">
                 <ChatComposer />
+              </ThreadProvider>
+            </Spec>
+            <Spec title="Composer" note="your own pickers in leadingActions and extraActions">
+              <ThreadProvider conversationId="gallery-composer-controls">
+                <ComposerWithControls />
               </ThreadProvider>
             </Spec>
             <Spec title="FileCard" note="attachment, expanded">

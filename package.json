@@ -79,10 +79,24 @@
         "default": "./dist/mock.cjs"
       }
     },
+    "./conformance": {
+      "import": {
+        "types": "./dist/conformance.d.ts",
+        "default": "./dist/conformance.js"
+      },
+      "require": {
+        "types": "./dist/conformance.d.cts",
+        "default": "./dist/conformance.cjs"
+      }
+    },
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "agentic-chat-conformance": "./bin/agentic-chat-conformance.mjs"
   },
   "files": [
     "dist",
+    "bin",
     "README.md",
     "CHANGELOG.md"
   ],
@@ -91,6 +105,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "prepare": "tsup",
     "dev": "vite --config playground/vite.config.ts",
     "playground:build": "vite build --config playground/vite.config.ts",
     "playground:preview": "vite preview --config playground/vite.config.ts",
@@ -112,7 +127,7 @@
     "remark-gfm": "^4.0.1"
   },
   "peerDependencies": {
-    "@neofloai/atoms": "^2.1.0",
+    "@neofloai/atoms": "^3.0.0",
     "react": "^18.2.0 || ^19.0.0",
     "react-dom": "^18.2.0 || ^19.0.0",
     "recharts": "^2.12.0 || ^3.0.0"
@@ -129,7 +144,7 @@
     "@arethetypeswrong/cli": "^0.18.5",
     "@changesets/cli": "^3.0.3",
     "@eslint/js": "^10.0.1",
-    "@neofloai/atoms": "github:neofloai/atoms#semver:^2.1.0",
+    "@neofloai/atoms": "github:neofloai/atoms#semver:^3.0.0",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",

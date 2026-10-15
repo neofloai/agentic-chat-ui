@@ -25,10 +25,29 @@ export interface MockWriter {
     block: Omit<ContentBlock, 'id'> & { id?: string },
     options?: { snapshots?: unknown[]; interval?: number; startWith?: Record<string, unknown> },
   ): Promise<ContentBlock>;
+  /**
+   * Emits a standard tool call: a `tool_use` block, then (after `durationMs`) its `tool_result`
+   * with `tool_use_id`. Pass `result: null` to end without a result, as an interrupted tool.
+   */
+  tool(
+    name: string,
+    input: Record<string, unknown>,
+    result: ToolResultPayload | null,
+    options?: { durationMs?: number; title?: string },
+  ): Promise<ContentBlock>;
   /** Emits a HITL block + checkpoint and ends the turn paused. */
   pause(options: PauseOptions): Promise<void>;
-  error(errorType: string, message: string, retryAfter?: number): Promise<void>;
+  error(errorType: string, message: string, retryAfter?: number, details?: Record<string, unknown>): Promise<void>;
   wait(ms: number): Promise<void>;
+}
+
+/** The payload of a `tool_result` block (the fields Ask Neo sends). */
+export interface ToolResultPayload {
+  is_error?: boolean;
+  error_code?: string | null;
+  result_count?: number;
+  results?: { title: string; snippet?: string; url?: string | null }[];
+  [key: string]: unknown;
 }
 
 export interface WriterHooks {
@@ -117,6 +136,28 @@ export function createWriter(h: WriterHooks): MockWriter & { paused: boolean } {
       h.onBlockStop(block);
       return block;
     },
+    async tool(name, input, result, options) {
+      const call = await writer.block({
+        type: 'tool_use',
+        category: 'tool',
+        tool: name,
+        input,
+        ...(options?.title ? { title: options.title } : {}),
+      });
+      await wait(options?.durationMs ?? h.speed * 20);
+      if (result) {
+        await writer.block({
+          type: 'tool_result',
+          category: 'tool',
+          tool_use_id: call.id,
+          is_error: false,
+          error_code: null,
+          http_trace: null,
+          ...result,
+        });
+      }
+      return call;
+    },
     async pause({ block: raw, requires, onResume }) {
       guard();
       const block = await writer.block(raw);
@@ -125,9 +166,16 @@ export function createWriter(h: WriterHooks): MockWriter & { paused: boolean } {
       h.push({ type: 'checkpoint', checkpoint_id: checkpointId, block_index: h.lastIndex(), requires: requires ?? null });
       writer.paused = true;
     },
-    async error(errorType, message, retryAfter) {
+    async error(errorType, message, retryAfter, details) {
       guard();
-      h.push({ type: 'error', error_type: errorType, message, retry_after: retryAfter ?? null });
+      h.push({
+        type: 'error',
+        error_type: errorType,
+        message,
+        retry_after: retryAfter ?? null,
+        request_id: h.newId('req_'),
+        details: details ?? null,
+      });
     },
     wait,
   };

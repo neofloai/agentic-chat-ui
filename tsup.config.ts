@@ -7,6 +7,7 @@ export default defineConfig({
     core: 'src/core.ts',
     charts: 'src/charts.ts',
     mock: 'src/mock.ts',
+    conformance: 'src/conformance.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,

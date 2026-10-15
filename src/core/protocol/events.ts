@@ -48,6 +48,8 @@ export function parseStreamEvent(payload: unknown, eventName?: string): ParseRes
           conversation_id: isString(p.conversation_id) ? p.conversation_id : '',
           run_id: isString(p.run_id) ? p.run_id : '',
           persona: p.persona ?? null,
+          user_message_id: isString(p.user_message_id) ? p.user_message_id : null,
+          client_message_id: isString(p.client_message_id) ? p.client_message_id : null,
         },
       };
     case 'status':
@@ -101,6 +103,8 @@ export function parseStreamEvent(payload: unknown, eventName?: string): ParseRes
           error_type: isString(p.error_type) ? p.error_type : 'unknown_error',
           message: isString(p.message) ? p.message : 'Something went wrong.',
           retry_after: typeof p.retry_after === 'number' ? p.retry_after : null,
+          request_id: isString(p.request_id) ? p.request_id : null,
+          details: isObject(p.details) ? p.details : null,
         },
       };
     default:
