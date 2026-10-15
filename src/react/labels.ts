@@ -16,6 +16,11 @@ export interface ChatLabels {
   scopeSelectAll: string;
   scopeDeselectAll: string;
   scopeLabel: string;
+  /** A multiple-choice `ComposerPicker`'s trigger text, from its `name`. */
+  pickerSummary: (name: string, selected: number, total: number) => string;
+  /** A `ComposerPicker` group heading's action. */
+  pickerSelectAll: string;
+  pickerDeselectAll: string;
 
   newChat: string;
   history: string;
@@ -106,6 +111,10 @@ export const defaultLabels: ChatLabels = {
   scopeSelectAll: 'Select all',
   scopeDeselectAll: 'Deselect all',
   scopeLabel: 'Choose which workflows to ask about',
+  pickerSummary: (name, selected, total) =>
+    selected === total ? `All ${name.toLowerCase()}` : selected === 0 ? `No ${name.toLowerCase()}` : `${name} (${selected})`,
+  pickerSelectAll: 'Select all',
+  pickerDeselectAll: 'Deselect all',
 
   newChat: 'New chat',
   history: 'History',

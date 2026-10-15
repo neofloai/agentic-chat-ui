@@ -1,25 +1,12 @@
-import {
-  Box,
-  Button,
-  Card,
-  Checkbox,
-  Chip,
-  CircularProgress,
-  IconButton,
-  LinearProgress,
-  Menu,
-  MenuItem,
-  Stack,
-  Tooltip,
-  Typography,
-} from '@neofloai/atoms';
-import { CaretDownIcon, FileIcon, FileTextIcon, PaperclipIcon, PaperPlaneTiltIcon, StopIcon, XIcon } from '@neofloai/atoms/icons';
+import { Box, Card, Chip, CircularProgress, IconButton, LinearProgress, Stack, Tooltip, Typography } from '@neofloai/atoms';
+import { FileIcon, FileTextIcon, PaperclipIcon, PaperPlaneTiltIcon, StopIcon, XIcon } from '@neofloai/atoms/icons';
 import { border, elevation, fontWeights, icon as iconTokens, radius, surface, text } from '@neofloai/atoms/tokens';
 import { forwardRef, useEffect, useId, useState, type FormHTMLAttributes, type ReactNode } from 'react';
 import type { Attachment } from '../../core/protocol/types';
 import { formatBytes } from '../../core/runtime/runtime';
 import type { ComposerAttachment } from '../../core/store/types';
 import { useChatEvent, useComposer, useLabels, useScope } from '../../react/hooks';
+import { ComposerPicker } from './ComposerPicker';
 import { Composer, useComposerContext } from '../../react/primitives';
 import { mode, type AtomsTheme } from '../kit/tokens';
 
@@ -118,86 +105,45 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ComposerAttachme
   );
 }
 
-/** Figma Composer-scope + SourcePicker: which workflows the question is about. */
+/** Joins a workspace and a workflow into one picker id. A unit separator never appears in either. */
+const SCOPE_SEP = '\u001f';
+
+/**
+ * Figma Composer-scope + SourcePicker: which workflows the question is about. A `ComposerPicker`
+ * over the scope catalog; it hides itself when there is no catalog or the backend takes no
+ * workflow context.
+ */
 export function ScopePicker() {
   const scope = useScope();
   const labels = useLabels();
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   if (!scope.enabled) return null;
   const { selected, allSelected } = scope.summary;
-  const label =
-    scope.status !== 'ready'
-      ? labels.scopeAll
-      : allSelected
-        ? labels.scopeAll
-        : selected === 0
-          ? labels.scopeNone
-          : labels.scopeSome(selected);
-  const close = () => setAnchor(null);
-
+  const summary =
+    scope.status !== 'ready' || allSelected ? labels.scopeAll : selected === 0 ? labels.scopeNone : labels.scopeSome(selected);
+  const value = Object.entries(scope.selection).flatMap(([groupId, ids]) => ids.map((id) => groupId + SCOPE_SEP + id));
   return (
-    <>
-      <Button
-        size="sm"
-        variant="secondary"
-        appearance="outline"
-        startIcon={<CaretDownIcon />}
-        aria-haspopup="menu"
-        aria-expanded={Boolean(anchor)}
-        aria-label={`${labels.scopeLabel}: ${label}`}
-        disabled={scope.status === 'loading' || scope.groups.length === 0}
-        onClick={(e) => setAnchor(e.currentTarget)}
-      >
-        {label}
-      </Button>
-      <Menu
-        anchorEl={anchor}
-        open={Boolean(anchor)}
-        onClose={close}
-        variant="menu"
-        anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
-        transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        sx={{ '& .MuiMenu-paper': { minWidth: 280, maxHeight: 380 } }}
-      >
-        {scope.groups.flatMap((g) => {
-          const state = scope.groupState(g.id);
-          const action = state === 'all' ? labels.scopeDeselectAll : labels.scopeSelectAll;
-          return [
-            <MenuItem
-              key={`g:${g.id}`}
-              variant="secondary"
-              onClick={() => scope.setGroup(g.id, state !== 'all')}
-              aria-label={`${g.label}: ${action}`}
-            >
-              <Typography variant="body2" weight="medium" component="span" sx={{ flex: 1 }}>
-                {g.label}
-              </Typography>
-              <Typography
-                variant="body2"
-                component="span"
-                sx={(t: AtomsTheme) => ({ ml: 2, ...mode(t, { color: text.primary[3] }) })}
-              >
-                {action}
-              </Typography>
-            </MenuItem>,
-            ...g.items.map((item) => {
-              const checked = scope.isSelected(g.id, item.id);
-              return (
-                <MenuItem
-                  key={`${g.id}:${item.id}`}
-                  role="menuitemcheckbox"
-                  aria-checked={checked}
-                  onClick={() => scope.toggle(g.id, item.id)}
-                >
-                  <Checkbox size="sm" checked={checked} tabIndex={-1} aria-hidden sx={{ p: 0, mr: 1.25 }} />
-                  {item.label}
-                </MenuItem>
-              );
-            }),
-          ];
-        })}
-      </Menu>
-    </>
+    <ComposerPicker
+      name={labels.scopeLabel}
+      triggerLabel={summary}
+      selectAllLabel={labels.scopeSelectAll}
+      deselectAllLabel={labels.scopeDeselectAll}
+      loading={scope.status === 'loading'}
+      groups={scope.groups.map((g) => ({
+        id: g.id,
+        label: g.label,
+        selectAll: true,
+        items: g.items.map((item) => ({ id: g.id + SCOPE_SEP + item.id, label: item.label })),
+      }))}
+      value={value}
+      onChange={(next) => {
+        const selection: Record<string, string[]> = Object.fromEntries(scope.groups.map((g) => [g.id, []]));
+        for (const key of next) {
+          const [groupId, id] = key.split(SCOPE_SEP) as [string, string];
+          (selection[groupId] ??= []).push(id);
+        }
+        scope.setSelection(selection);
+      }}
+    />
   );
 }
 
@@ -231,7 +177,9 @@ function RejectedNotice() {
   );
 }
 
-function ComposerControls({ extraActions }: { extraActions?: ReactNode }) {
+type ControlsProps = Pick<ChatComposerProps, 'leadingActions' | 'extraActions' | 'scopePicker'>;
+
+function ComposerControls({ leadingActions, extraActions, scopePicker }: ControlsProps) {
   const c = useComposerContext();
   const labels = useLabels();
   return (
@@ -241,7 +189,8 @@ function ComposerControls({ extraActions }: { extraActions?: ReactNode }) {
           <PaperclipIcon />
         </IconButton>
       </Composer.AttachmentInput>
-      <ScopePicker />
+      {scopePicker === undefined ? <ScopePicker /> : scopePicker || null}
+      {leadingActions}
       <Box sx={{ flex: 1 }} />
       {extraActions}
       {c.busy ? (
@@ -269,8 +218,18 @@ function ComposerAttachmentRow() {
 
 export interface ChatComposerProps {
   placeholder?: string;
-  /** Extra controls before the send button (a model picker, a mic…). */
+  /**
+   * Controls on the left, after the attach button and the workflow picker: a `ComposerPicker` for
+   * tools or data sources, a mode switch…
+   */
+  leadingActions?: ReactNode;
+  /** Controls on the right, before the send button: a model picker, a mic… */
   extraActions?: ReactNode;
+  /**
+   * The workflow picker's place. Omit it for the built-in `ScopePicker` (which hides itself when
+   * there is no workflow catalog), pass your own node to replace it, or `false` to leave it out.
+   */
+  scopePicker?: ReactNode | false;
   /** Rendered under the composer (a disclaimer, a hint). */
   footer?: ReactNode;
   /** @default 8 */
@@ -278,8 +237,16 @@ export interface ChatComposerProps {
   autoFocus?: boolean;
 }
 
-/** Figma Composer: the input, attachments, the scope picker and send/stop. */
-export function ChatComposer({ placeholder, extraActions, footer, maxRows = 8, autoFocus }: ChatComposerProps) {
+/** Figma Composer: the input, attachments, the workflow picker, your own controls, and send/stop. */
+export function ChatComposer({
+  placeholder,
+  leadingActions,
+  extraActions,
+  scopePicker,
+  footer,
+  maxRows = 8,
+  autoFocus,
+}: ChatComposerProps) {
   const [dragging, setDragging] = useState(false);
   const hintId = useId();
   return (
@@ -324,7 +291,7 @@ export function ChatComposer({ placeholder, extraActions, footer, maxRows = 8, a
               <ComposerAttachmentRow />
             </Stack>
             <Composer.Input placeholder={placeholder} maxRows={maxRows} autoFocus={autoFocus} aria-describedby={hintId} />
-            <ComposerControls extraActions={extraActions} />
+            <ComposerControls leadingActions={leadingActions} extraActions={extraActions} scopePicker={scopePicker} />
           </Box>
         </DropZone>
       </Composer.Root>

@@ -3,6 +3,7 @@ import { text } from '@neofloai/atoms/tokens';
 import {
   Block,
   ChatComposer,
+  ComposerPicker,
   ChatHistory,
   ChatProvider,
   ChatSuggestions,
@@ -511,6 +512,49 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+/** Your own controls in the composer's slots: a tools picker on the left, a model picker on the right. */
+function ComposerWithControls() {
+  const [tools, setTools] = useState(['web', 'docs']);
+  const [model, setModel] = useState(['balanced']);
+  return (
+    <ChatComposer
+      scopePicker={false}
+      leadingActions={
+        <ComposerPicker
+          name="Tools"
+          groups={[
+            {
+              id: 'tools',
+              label: 'Tools',
+              selectAll: true,
+              items: [
+                { id: 'web', label: 'Web search' },
+                { id: 'docs', label: 'Documents', description: 'Files uploaded to this workspace' },
+                { id: 'erp', label: 'ERP' },
+              ],
+            },
+          ]}
+          value={tools}
+          onChange={setTools}
+        />
+      }
+      extraActions={
+        <ComposerPicker
+          name="Model"
+          multiple={false}
+          items={[
+            { id: 'fast', label: 'Fast' },
+            { id: 'balanced', label: 'Balanced' },
+            { id: 'deep', label: 'Deep' },
+          ]}
+          value={model}
+          onChange={setModel}
+        />
+      }
+    />
+  );
+}
+
 function Spec({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
     <Box sx={{ minWidth: 0 }}>
@@ -632,6 +676,11 @@ export function GalleryPage() {
             <Spec title="Composer" note="typed, two attachments">
               <ThreadProvider conversationId="gallery-composer-files">
                 <ChatComposer />
+              </ThreadProvider>
+            </Spec>
+            <Spec title="Composer" note="your own pickers in leadingActions and extraActions">
+              <ThreadProvider conversationId="gallery-composer-controls">
+                <ComposerWithControls />
               </ThreadProvider>
             </Spec>
             <Spec title="FileCard" note="attachment, expanded">

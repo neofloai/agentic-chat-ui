@@ -24,6 +24,12 @@ export {
   type ChatComposerProps,
   type FileCardProps,
 } from './ui/shell/Composer';
+export {
+  ComposerPicker,
+  type ComposerPickerProps,
+  type ComposerPickerGroup,
+  type ComposerPickerItem,
+} from './ui/shell/ComposerPicker';
 export { UserTurn, AssistantTurn, RunStatus, PendingTurn, ChatSuggestions, WelcomeScreen } from './ui/shell/Turn';
 export { ChatHistory, type ChatHistoryProps } from './ui/history/ChatHistory';
 
