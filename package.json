@@ -1,6 +1,6 @@
 {
   "name": "@neofloai/agentic-chat",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agentic chat UI for React: streaming, chat history, HITL decisions, tool activity, custom cards and charts, on top of the Neoflo chat-layer schema v1. Built with @neofloai/atoms.",
   "license": "UNLICENSED",
   "author": "Neoflo",
