@@ -119,7 +119,8 @@
     "lint:package": "publint && attw --pack . --profile node16",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build && npm run lint:package",
     "changeset": "changeset",
-    "version-packages": "changeset version"
+    "version-packages": "changeset version",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.3",

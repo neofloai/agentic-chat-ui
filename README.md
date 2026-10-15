@@ -629,7 +629,8 @@ npm run check          # typecheck, lint, tests, build, package validation
 - Point the playground at a real backend with `VITE_CHAT_BASE_URL` and `VITE_CHAT_TOKEN` in `playground/.env.local`. That mode only exists locally; the public demo compiles it out.
 - New UI goes into the gallery (`playground/src/GalleryPage.tsx`) in every state, in light and dark.
 - **Import only from Atoms' public entry points.** Lint enforces it, along with keeping `/headless` free of Atoms and `/core` free of React.
-- Add a changeset (`npm run changeset`) to every PR that changes the library. Merging the generated "Version packages" PR tags the release with a prebuilt `dist/`, creates the GitHub Release, and redeploys the demo.
+- Add a changeset (`npm run changeset`) to every PR that changes the library.
+- Releases are manual: `npm run version-packages` in a PR (version bump and `CHANGELOG.md`), then `npm run release` on `main` (tag with a prebuilt `dist/`, and the GitHub Release). The steps are in [.changeset/README.md](.changeset/README.md). Every push to `main` redeploys the demo.
 
 Project layout:
 
