@@ -1,0 +1,322 @@
+/**
+ * Wire types for the Neoflo chat standard (schema v1, revision 1.2): endpoints 0–7 and the
+ * SSE stream. Every product backend implements these, and the library reads them.
+ *
+ * Field names stay snake_case here because these are the exact payloads on the wire.
+ * The runtime models in `core/store/types.ts` are the camelCased view the UI reads.
+ *
+ * Identity, workspace and tenant never appear in a payload: they come from the session
+ * (a Bearer header or a session cookie). Credentials for other systems stay on the server;
+ * the browser only ever sees a connection's status.
+ */
+declare const PROTOCOL_VERSION: "v1";
+/** The standard revision this library implements, as `GET /v1/chat/config` reports it. */
+declare const STANDARD_REVISION: "1.2";
+/** ISO-8601 timestamp, e.g. `2026-09-21T09:12:00Z`. */
+type ISODateString = string;
+/** A retrieval/tool capability available to a turn. `meta` holds the product's own settings. */
+interface Source {
+    id: string;
+    enabled: boolean;
+    meta: Record<string, unknown>;
+}
+type ConnectionState = 'connected' | 'expired' | 'missing';
+/**
+ * A connected system's status, read from `source.meta.connection`. Nothing else about the
+ * credential ever reaches the browser.
+ */
+interface ConnectionStatus {
+    status: ConnectionState;
+    expires_at?: ISODateString | null;
+}
+/** Product-only fields, keyed by `config.product.id`, e.g. `{ askneo: { … } }`. */
+type Ext = Record<string, unknown>;
+/** A starter-prompt chip. `label` is the chip text; `prompt` is what gets sent. */
+interface SuggestedPrompt {
+    label: string;
+    prompt: string;
+}
+/** A file already uploaded by the host app. The schema has no upload endpoint. */
+interface Attachment {
+    url: string;
+    filename: string;
+    content_type: string;
+    size: number;
+    meta: Record<string, unknown>;
+}
+/** Known workflow names; any other string is allowed so new workflows don't need a release. */
+type WorkflowName = 'ip' | 'vq' | 'col' | (string & {});
+interface WorkflowContext {
+    workflow_name: WorkflowName;
+    workspace_id: string[];
+    context: Record<string, unknown>;
+}
+/** Endpoint 2 item. */
+interface ConversationSummary {
+    conversation_id: string;
+    title: string;
+    created_at: ISODateString;
+    updated_at: ISODateString;
+    archived: boolean;
+    /** The model this conversation uses. */
+    selected_model?: string | null;
+    /** Older backends send the selected model as `model` on endpoints 2–4. */
+    model?: string | string[] | null;
+    message_count?: number;
+    ext?: Ext;
+}
+/** Endpoint 1 response. */
+interface ConversationBootstrap extends ConversationSummary {
+    subtitle?: string;
+    sources: Source[];
+    greeting?: string;
+    suggested_prompts?: SuggestedPrompt[];
+}
+/**
+ * One unit of an assistant turn. Every block carries `id`, `type` and `category`;
+ * everything else depends on the type (see docs/block-contracts.md).
+ */
+interface ContentBlock {
+    id: string;
+    type: string;
+    category: string;
+    [key: string]: unknown;
+}
+type MessageRole = 'user' | 'assistant';
+type StopReason = 'end_turn' | 'paused' | 'error' | 'cancelled';
+/** A message as it comes back from endpoint 3. */
+interface WireMessage {
+    message_id: string;
+    conversation_id: string;
+    role: MessageRole;
+    content: ContentBlock[] | Record<string, unknown> | string;
+    stop_reason?: StopReason | null;
+    created_at: ISODateString;
+    model?: string | null;
+    run_id?: string | null;
+    usage?: Usage | null;
+    /** On user messages: the id the client sent with the message. */
+    client_message_id?: string | null;
+    ext?: Ext;
+    [key: string]: unknown;
+}
+/** Endpoint 3 response. */
+interface ConversationDetail extends ConversationSummary {
+    subtitle?: string;
+    sources?: Source[];
+    messages: WireMessage[];
+    /** Only with the `message_pagination` capability. */
+    has_more_messages?: boolean;
+}
+/** Endpoint 4 body. At least one field is required. `archived` needs the `archive` capability. */
+interface ConversationPatch {
+    title?: string | null;
+    model?: string | null;
+    sources?: Source[] | null;
+    archived?: boolean | null;
+}
+/** Endpoint 4 response: the conversation object (endpoint 1 without the greeting). */
+interface UpdatedConversation extends ConversationSummary {
+    subtitle?: string;
+    sources?: Source[];
+}
+/**
+ * What a HITL card sends back. The schema shows a string (`"approve"`) and a
+ * string array (checkbox cards); an object is allowed for form-style cards.
+ */
+type HitlDecision = string | string[] | Record<string, unknown>;
+interface DefaultMessage {
+    role: 'user';
+    type: 'default';
+    content: {
+        default: string;
+    };
+}
+interface HitlMessage {
+    role: 'user';
+    type: 'hitl';
+    content: {
+        checkpoint_id: string;
+        decision: HitlDecision;
+    };
+}
+/** Endpoint 6 body: send a turn, or resume a paused HITL turn. */
+interface SendMessageBody {
+    stream?: boolean;
+    message: DefaultMessage | HitlMessage;
+    /**
+     * Created by the client. A repeat with the same id returns 409 `duplicate_message`, so a
+     * retry after a network error or a double click never starts two replies.
+     */
+    client_message_id?: string;
+    /** A per-message model (needs the `per_turn_model` capability). */
+    model?: string;
+    workflow_context?: WorkflowContext[];
+    attachments?: Attachment[];
+    /** For this message only; overrides the conversation's defaults by id. Settings only, never credentials. */
+    sources?: Source[];
+    ext?: Ext;
+}
+/**
+ * Endpoint 7 response. With `cancel: "server"`, `true` means the run stopped. `false` means
+ * the turn already finished, or the backend cancels by disconnect: either way the client
+ * closes the stream itself.
+ */
+interface CancelResult {
+    status: boolean;
+}
+/**
+ * What a backend supports. A flag missing from a config the backend returned means
+ * "not supported".
+ */
+interface ChatCapabilities {
+    hitl?: boolean;
+    attachments?: boolean;
+    workflow_context?: boolean;
+    archive?: boolean;
+    /** `server` calls endpoint 7; `disconnect` closes the stream instead. */
+    cancel?: 'server' | 'disconnect';
+    per_turn_model?: boolean;
+    per_turn_sources?: boolean;
+    conversation_pagination?: boolean;
+    message_pagination?: boolean;
+    stream_resume?: boolean;
+}
+interface ConfigModel {
+    id: string;
+    label: string;
+    default?: boolean;
+}
+interface ConfigSource {
+    id: string;
+    label: string;
+    description?: string;
+    default_enabled: boolean;
+    /** Product settings. `meta.connection` is a hint only; conversation responses are authoritative. */
+    meta: Record<string, unknown>;
+}
+interface ConfigWorkflow {
+    id: string;
+    label: string;
+    workspaces: {
+        id: string;
+        label: string;
+    }[];
+}
+interface ChatLimits {
+    max_message_chars?: number;
+    max_attachments?: number;
+    max_attachment_bytes?: number;
+    /** MIME types or extensions, as for a file input's `accept`. */
+    attachment_types?: string[];
+}
+/** Endpoint 0 response. */
+interface ChatConfig {
+    protocol_version: string;
+    /** `id` is the product's key in `ext` and the prefix of its own error codes and block types. */
+    product: {
+        id: string;
+        name: string;
+    };
+    capabilities: ChatCapabilities;
+    models: ConfigModel[];
+    sources: ConfigSource[];
+    workflows: ConfigWorkflow[];
+    limits: ChatLimits;
+    ext?: Ext;
+}
+/**
+ * The shared error codes. HTTP errors and stream `error` events use the same list. A product
+ * adds its own as `<product>.<code>`; a client that doesn't know a code falls back to the
+ * behaviour for its HTTP status.
+ */
+declare const ERROR_CODES: readonly ["invalid_request", "unsupported_feature", "connection_required", "connection_expired", "unauthenticated", "access_denied", "not_found", "session_busy", "duplicate_message", "rate_limited", "upstream_unavailable", "internal"];
+type ErrorCode = (typeof ERROR_CODES)[number] | (string & {});
+/** Every non-2xx response body. */
+interface ErrorEnvelope {
+    error: {
+        type: ErrorCode;
+        message: string;
+        /** Seconds. Also sent as `Retry-After` on 429. */
+        retry_after?: number | null;
+        /** Also sent as the `X-Request-Id` header. Quote it when reporting a bug. */
+        request_id?: string | null;
+        /** For example `{ "field": "sources.0.meta.chunk_size" }` or `{ "source": "invoice_processing" }`. */
+        details?: Record<string, unknown> | null;
+    };
+}
+interface Usage {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    [key: string]: number | undefined;
+}
+interface MessageStartEvent {
+    type: 'message_start';
+    message_id: string;
+    conversation_id: string;
+    run_id: string;
+    /** Reserved, unused today. */
+    persona?: unknown;
+    /** The id the server saved the user's message under. */
+    user_message_id?: string | null;
+    /** Echo of the request's `client_message_id`. */
+    client_message_id?: string | null;
+}
+interface StatusEvent {
+    type: 'status';
+    label: string;
+}
+interface ContentBlockStartEvent {
+    type: 'content_block_start';
+    index: number;
+    block: ContentBlock;
+}
+interface ContentBlockDelta {
+    type: string;
+    text?: string;
+    [key: string]: unknown;
+}
+interface ContentBlockDeltaEvent {
+    type: 'content_block_delta';
+    index: number;
+    delta: ContentBlockDelta;
+    /** A full overwrite, not incremental. */
+    snapshot?: unknown;
+}
+interface ContentBlockStopEvent {
+    type: 'content_block_stop';
+    index: number;
+    /** The complete, final block. */
+    block: ContentBlock;
+}
+interface CheckpointEvent {
+    type: 'checkpoint';
+    checkpoint_id: string;
+    block_index: number;
+    requires?: unknown;
+}
+interface MessageDeltaEvent {
+    type: 'message_delta';
+    usage?: Usage;
+}
+interface MessageStopEvent {
+    type: 'message_stop';
+    message_id: string;
+    model?: string | null;
+    title?: string | null;
+    stop_reason: StopReason;
+}
+interface ErrorEvent {
+    type: 'error';
+    /** A code from `ERROR_CODES`, or a product's own `<product>.<code>`. */
+    error_type: ErrorCode;
+    message: string;
+    retry_after?: number | null;
+    request_id?: string | null;
+    details?: Record<string, unknown> | null;
+}
+type StreamEvent = MessageStartEvent | StatusEvent | ContentBlockStartEvent | ContentBlockDeltaEvent | ContentBlockStopEvent | CheckpointEvent | MessageDeltaEvent | MessageStopEvent | ErrorEvent;
+type StreamEventType = StreamEvent['type'];
+
+export { type Attachment as A, type ErrorEvent as B, type ChatConfig as C, type DefaultMessage as D, type Ext as E, type HitlMessage as F, type MessageRole as G, type HitlDecision as H, type ISODateString as I, type MessageStartEvent as J, type MessageStopEvent as K, STANDARD_REVISION as L, type MessageDeltaEvent as M, type StatusEvent as N, type StreamEventType as O, PROTOCOL_VERSION as P, type WorkflowContext as Q, type WorkflowName as R, type SendMessageBody as S, type UpdatedConversation as U, type WireMessage as W, type ConversationBootstrap as a, type ConversationSummary as b, type ConversationDetail as c, type ConversationPatch as d, type StreamEvent as e, type CancelResult as f, type ContentBlock as g, type StopReason as h, type Usage as i, type SuggestedPrompt as j, type Source as k, type ContentBlockDelta as l, type ConnectionState as m, type ChatCapabilities as n, type ChatLimits as o, type CheckpointEvent as p, type ConfigModel as q, type ConfigSource as r, type ConfigWorkflow as s, type ConnectionStatus as t, type ContentBlockDeltaEvent as u, type ContentBlockStartEvent as v, type ContentBlockStopEvent as w, ERROR_CODES as x, type ErrorCode as y, type ErrorEnvelope as z };
