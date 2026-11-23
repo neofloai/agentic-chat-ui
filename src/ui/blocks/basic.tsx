@@ -1,7 +1,7 @@
 import {
   Alert,
   Box,
-  Chip,
+  Tag,
   CircularProgress,
   Link,
   List,
@@ -134,14 +134,23 @@ export function ToolBlock({ data }: BlockRenderProps<ToolCallData>) {
       {labels.toolRunning}
     </Box>
   ) : data.status === 'error' ? (
-    <Chip size="sm" variant="error" label={labels.toolFailed} />
+    <Tag variant="error" label={labels.toolFailed} />
   ) : data.status === 'interrupted' ? (
-    <Chip size="sm" variant="warning" label={labels.toolInterrupted} />
+    <Tag variant="warning" label={labels.toolInterrupted} />
   ) : data.durationMs !== undefined ? (
     formatDuration(data.durationMs)
   ) : undefined;
   return (
-    <BlockShell icon={<WrenchIcon />} title={data.title ?? data.name} meta={meta} busy={running} aria-label={data.name}>
+    // Folded like thinking: the head says what ran and how it went; the inputs and result are a click away.
+    <BlockShell
+      icon={<WrenchIcon />}
+      title={data.title ?? data.name}
+      meta={meta}
+      busy={running}
+      aria-label={data.name}
+      collapsible={items.length > 0}
+      defaultOpen={false}
+    >
       {items.length ? <KeyValueList items={items} /> : null}
     </BlockShell>
   );

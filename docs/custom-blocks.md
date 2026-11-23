@@ -52,7 +52,7 @@ const approvals = { ...approvalBlock, type: ['approval', 'approval_card'] };
 
 Build cards from the kit so they match the built-in blocks:
 
-- `BlockShell`: the card itself. It takes `icon`, `title`, `meta`, `actions`, `footer`, `collapsible`, `tone` (`primary`, `warning`, `danger` for attention), and `flushBody` for edge-to-edge content.
+- `BlockShell`: the card itself. It takes `icon`, `title`, `meta`, `actions`, `footer`, `collapsible` (with `defaultOpen={false}` to start folded, as the tool card does, or `open` and `onOpenChange` to control it), `tone` (`primary`, `warning`, `danger` for attention), and `flushBody` for edge-to-edge content.
 - `KeyValueList`: muted keys against values.
 - `Shimmer`: text still arriving.
 - `ChartCard`, `ChartLegend`, `useChartPalette` from `/charts`.

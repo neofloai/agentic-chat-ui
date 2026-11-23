@@ -1,4 +1,4 @@
-import { Box, Button, Checkbox, Chip, Radio, RadioGroup, Stack, Typography } from '@neofloai/atoms';
+import { Box, Button, Checkbox, Tag, Radio, RadioGroup, Stack, Typography } from '@neofloai/atoms';
 import { ListChecksIcon, WarningIcon } from '@neofloai/atoms/icons';
 import { text } from '@neofloai/atoms/tokens';
 import { useState } from 'react';
@@ -56,8 +56,7 @@ export function ApprovalBlock({ data }: BlockRenderProps<ApprovalData>) {
   let footer = null;
   if (resolvedAs) {
     footer = (
-      <Chip
-        size="sm"
+      <Tag
         variant={resolvedAs === 'approve' ? 'success' : 'secondary'}
         label={resolvedAs === 'approve' ? labels.approved : labels.rejected}
       />
@@ -133,7 +132,7 @@ export function ChoiceBlock({ data }: BlockRenderProps<ChoiceData>) {
     setSelected((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
 
   const footer = hitl.isResolved ? (
-    <Chip size="sm" variant="success" label={labels.submitted} />
+    <Tag variant="success" label={labels.submitted} />
   ) : live ? (
     <>
       <Button
