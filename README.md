@@ -48,7 +48,7 @@ It's built on [`@neofloai/atoms`](https://github.com/neofloai/atoms), so it look
 The package installs straight from GitHub. It has no registry, needs no token, and follows semver through release tags:
 
 ```bash
-npm install github:neofloai/agentic-chat-ui#semver:^0.1.0
+npm install github:neofloai/agentic-chat-ui#semver:^0.3.0
 
 # The UI is built on Atoms (skip it if you only use /headless or /core)
 npm install github:neofloai/atoms#semver:^4.0.0
