@@ -1,6 +1,6 @@
 import {
   Box,
-  Chip,
+  Tag,
   CircularProgress,
   Dialog,
   DialogContent,
@@ -80,7 +80,7 @@ export function ArtifactBlock({ data, actions, status }: BlockRenderProps<Artifa
         busy={status === 'streaming'}
         actions={
           <>
-            <Chip size="sm" variant="secondary" label={FORMAT_LABEL[data.format] ?? data.format} />
+            <Tag variant="secondary" label={FORMAT_LABEL[data.format] ?? data.format} />
             {content ? (
               <Tooltip title={labels.openFull}>
                 <IconButton size="sm" variant="secondary" appearance="text" aria-label={labels.openFull} onClick={openFull}>

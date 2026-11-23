@@ -1,4 +1,4 @@
-import { Box, Button, Chip, Fade, IconButton, Skeleton, Stack, Tooltip, Typography } from '@neofloai/atoms';
+import { Box, Button, Tag, Fade, IconButton, Skeleton, Stack, Tooltip, Typography } from '@neofloai/atoms';
 import { CheckIcon, CopyIcon, LightningIcon } from '@neofloai/atoms/icons';
 import { border, radius, surface, text } from '@neofloai/atoms/tokens';
 import { useState } from 'react';
@@ -140,7 +140,17 @@ export function RunStatus() {
     <Box aria-live="polite" aria-atomic="true" sx={{ minHeight: 0 }}>
       <Fade in={Boolean(label)} unmountOnExit>
         <Box sx={{ display: 'inline-flex' }}>
-          <Chip dense appearance="outline" variant="secondary" icon={<PulseDot />} label={label ?? ''} />
+          <Tag
+            appearance="outline"
+            variant="secondary"
+            // Tag sizes its icon slot to 12px; centre the 6px dot in it rather than stretch it.
+            icon={
+              <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                <PulseDot />
+              </Box>
+            }
+            label={label ?? ''}
+          />
         </Box>
       </Fade>
     </Box>

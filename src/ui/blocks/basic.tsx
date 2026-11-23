@@ -1,7 +1,7 @@
 import {
   Alert,
   Box,
-  Chip,
+  Tag,
   CircularProgress,
   Link,
   List,
@@ -134,9 +134,9 @@ export function ToolBlock({ data }: BlockRenderProps<ToolCallData>) {
       {labels.toolRunning}
     </Box>
   ) : data.status === 'error' ? (
-    <Chip size="sm" variant="error" label={labels.toolFailed} />
+    <Tag variant="error" label={labels.toolFailed} />
   ) : data.status === 'interrupted' ? (
-    <Chip size="sm" variant="warning" label={labels.toolInterrupted} />
+    <Tag variant="warning" label={labels.toolInterrupted} />
   ) : data.durationMs !== undefined ? (
     formatDuration(data.durationMs)
   ) : undefined;

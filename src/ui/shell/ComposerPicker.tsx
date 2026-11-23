@@ -1,4 +1,4 @@
-import { Box, Checkbox, Chip, Divider, Menu, MenuItem, Typography } from '@neofloai/atoms';
+import { Box, Button, Checkbox, Divider, Menu, MenuItem, Typography } from '@neofloai/atoms';
 import { CaretDownIcon } from '@neofloai/atoms/icons';
 import { radius, text } from '@neofloai/atoms/tokens';
 import { useContext, useState, type ReactNode } from 'react';
@@ -232,12 +232,11 @@ export function ComposerPicker({
 
   return (
     <>
-      <Chip
-        dense
+      <Button
+        size="md"
         variant="secondary"
         appearance="outline"
-        icon={<CaretDownIcon size={14} />}
-        label={summary}
+        startIcon={<CaretDownIcon />}
         aria-haspopup="menu"
         aria-expanded={Boolean(anchor)}
         aria-label={typeof summary === 'string' ? `${name}: ${summary}` : name}
@@ -245,8 +244,10 @@ export function ComposerPicker({
         disabled={disabled || loading || options.length === 0}
         onClick={(e) => setAnchor(e.currentTarget)}
         // Figma's Composer-scope pill is fully round.
-        sx={{ flexShrink: 0, borderRadius: `${radius.full}px`, '& .MuiChip-icon': { fontSize: 14, width: 14, height: 14 } }}
-      />
+        sx={{ flexShrink: 0, borderRadius: `${radius.full}px` }}
+      >
+        {summary}
+      </Button>
       <Menu
         anchorEl={anchor}
         open={Boolean(anchor)}

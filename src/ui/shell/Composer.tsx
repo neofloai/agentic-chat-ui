@@ -1,4 +1,4 @@
-import { Box, Card, Chip, CircularProgress, IconButton, LinearProgress, Stack, Tooltip, Typography } from '@neofloai/atoms';
+import { Box, Card, CircularProgress, IconButton, LinearProgress, Stack, Tag, Tooltip, Typography } from '@neofloai/atoms';
 import { FileIcon, FileTextIcon, PaperclipIcon, PaperPlaneTiltIcon, StopIcon, XIcon } from '@neofloai/atoms/icons';
 import { border, elevation, fontWeights, icon as iconTokens, radius, surface, text } from '@neofloai/atoms/tokens';
 import { forwardRef, useEffect, useId, useState, type FormHTMLAttributes, type ReactNode } from 'react';
@@ -84,24 +84,39 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ComposerAttachme
   const labels = useLabels();
   const icon = attachment.status === 'uploading' ? <CircularProgress size={12} /> : <FileTextIcon />;
   return (
-    <Tooltip
-      title={
-        attachment.status === 'error'
-          ? (attachment.error ?? labels.uploadFailed)
-          : `${attachment.name} · ${formatBytes(attachment.size)}`
-      }
-    >
-      <Chip
-        dense
-        appearance="outline"
-        variant={attachment.status === 'error' ? 'error' : 'primary'}
-        icon={icon}
-        label={attachment.name}
-        onDelete={onRemove}
-        aria-label={attachment.name}
-        sx={{ maxWidth: 240 }}
-      />
-    </Tooltip>
+    <Stack direction="row" spacing={0.25} sx={{ alignItems: 'center', minWidth: 0 }}>
+      <Tooltip
+        title={
+          attachment.status === 'error'
+            ? (attachment.error ?? labels.uploadFailed)
+            : `${attachment.name} · ${formatBytes(attachment.size)}`
+        }
+      >
+        <Tag
+          appearance="outline"
+          variant={attachment.status === 'error' ? 'error' : 'primary'}
+          icon={icon}
+          // Tag's label is a flex row, so the name needs its own box to truncate.
+          label={
+            <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {attachment.name}
+            </Box>
+          }
+          aria-label={attachment.name}
+          sx={{ maxWidth: 240 }}
+        />
+      </Tooltip>
+      {/* A tag is a label, not a control: removal is its own button. */}
+      <IconButton
+        size="sm"
+        variant="secondary"
+        appearance="text"
+        aria-label={labels.removeAttachment(attachment.name)}
+        onClick={onRemove}
+      >
+        <XIcon />
+      </IconButton>
+    </Stack>
   );
 }
 
