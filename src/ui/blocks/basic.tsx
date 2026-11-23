@@ -141,7 +141,16 @@ export function ToolBlock({ data }: BlockRenderProps<ToolCallData>) {
     formatDuration(data.durationMs)
   ) : undefined;
   return (
-    <BlockShell icon={<WrenchIcon />} title={data.title ?? data.name} meta={meta} busy={running} aria-label={data.name}>
+    // Folded like thinking: the head says what ran and how it went; the inputs and result are a click away.
+    <BlockShell
+      icon={<WrenchIcon />}
+      title={data.title ?? data.name}
+      meta={meta}
+      busy={running}
+      aria-label={data.name}
+      collapsible={items.length > 0}
+      defaultOpen={false}
+    >
       {items.length ? <KeyValueList items={items} /> : null}
     </BlockShell>
   );

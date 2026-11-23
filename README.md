@@ -265,21 +265,21 @@ export const amountCard = defineBlock({
 
 A block is one piece of an answer. The renderer is picked by the block's `type`, falling back to its `category`. A product's own `<product>.<name>` type never falls back by category: without a registered renderer it shows its `fallback_text`.
 
-| `type` (aliases)           | Renders                                                                                            | Payload                                                      |
-| -------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `text` (`markdown`)        | Markdown on the Atoms type scale. Raw HTML is never rendered.                                      | [text](docs/block-contracts.md#text)                         |
-| `thinking` (`reasoning`)   | "Thought for N seconds". Open while streaming, folds when done.                                    | [thinking](docs/block-contracts.md#thinking)                 |
-| `tool_use` + `tool_result` | One card per tool call: name, inputs, results, duration. "Interrupted" when the result never came. | [tool_use](docs/block-contracts.md#tool_use-and-tool_result) |
-| `tool_call` (`tool`)       | The older single-block form of the same card                                                       | [tool_call](docs/block-contracts.md#tool_call)               |
-| `table`                    | A titled, sortable result set with a row count                                                     | [table](docs/block-contracts.md#table)                       |
-| `sources` (`citations`)    | What the answer read. Items can link out or be selectable.                                         | [sources](docs/block-contracts.md#sources)                   |
-| `approval`                 | Approve or reject a proposed action (HITL)                                                         | [approval](docs/block-contracts.md#approval)                 |
-| `choice`                   | Single or multi-select question (HITL)                                                             | [choice](docs/block-contracts.md#choice)                     |
-| `error`                    | Failure with a Try again button that respects `retry_after`                                        | [error](docs/block-contracts.md#error)                       |
-| `artifact` (`document`)    | A generated file with a preview, full view and download                                            | [artifact](docs/block-contracts.md#artifact)                 |
-| `image`                    | An image with a caption that opens larger                                                          | [image](docs/block-contracts.md#image)                       |
-| `plan` (`steps`)           | The agent's steps as a live stepper                                                                | [plan](docs/block-contracts.md#plan)                         |
-| `chart`                    | Bar, line, area and donut in Atoms colors (`/charts`)                                              | [chart](docs/block-contracts.md#chart)                       |
+| `type` (aliases)           | Renders                                                                                                                      | Payload                                                      |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `text` (`markdown`)        | Markdown on the Atoms type scale. Raw HTML is never rendered.                                                                | [text](docs/block-contracts.md#text)                         |
+| `thinking` (`reasoning`)   | "Thought for N seconds". Open while streaming, folds when done.                                                              | [thinking](docs/block-contracts.md#thinking)                 |
+| `tool_use` + `tool_result` | One card per tool call: name and duration, folded; open it for inputs and results. "Interrupted" when the result never came. | [tool_use](docs/block-contracts.md#tool_use-and-tool_result) |
+| `tool_call` (`tool`)       | The older single-block form of the same card                                                                                 | [tool_call](docs/block-contracts.md#tool_call)               |
+| `table`                    | A titled, sortable result set with a row count                                                                               | [table](docs/block-contracts.md#table)                       |
+| `sources` (`citations`)    | What the answer read. Items can link out or be selectable.                                                                   | [sources](docs/block-contracts.md#sources)                   |
+| `approval`                 | Approve or reject a proposed action (HITL)                                                                                   | [approval](docs/block-contracts.md#approval)                 |
+| `choice`                   | Single or multi-select question (HITL)                                                                                       | [choice](docs/block-contracts.md#choice)                     |
+| `error`                    | Failure with a Try again button that respects `retry_after`                                                                  | [error](docs/block-contracts.md#error)                       |
+| `artifact` (`document`)    | A generated file with a preview, full view and download                                                                      | [artifact](docs/block-contracts.md#artifact)                 |
+| `image`                    | An image with a caption that opens larger                                                                                    | [image](docs/block-contracts.md#image)                       |
+| `plan` (`steps`)           | The agent's steps as a live stepper                                                                                          | [plan](docs/block-contracts.md#plan)                         |
+| `chart`                    | Bar, line, area and donut in Atoms colors (`/charts`)                                                                        | [chart](docs/block-contracts.md#chart)                       |
 
 ### Custom blocks
 
