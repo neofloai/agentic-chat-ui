@@ -1,3 +1,7 @@
+> [!WARNING]
+> **Deprecated.** `@neofloai/agentic-chat` is no longer maintained. The chat now ships with Atoms as [`@neofloai/atoms/chat`](https://atoms.neoflo.ai/chat) (Atoms 4.3.0 and later), and the conformance check as `atoms-chat-conformance` (Atoms 4.4.0 and later). The API is the same; only the import paths change. Existing installs keep working but get no further fixes.
+
+
 <img src="docs/brand/neoflo-mark.png" width="56" height="56" alt="Neoflo" />
 
 # @neofloai/agentic-chat
